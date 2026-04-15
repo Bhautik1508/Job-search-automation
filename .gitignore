@@ -1,0 +1,25 @@
+# Environment
+.env
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Database
+data/*.db-journal
+# NOTE: data/jobs.db is tracked intentionally for Render deployment (bundled demo data)
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (frontend)
+node_modules/
+dist/
+
+# Resume
+backend/resume/*.pdf

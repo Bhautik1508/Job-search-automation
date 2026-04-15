@@ -1,0 +1,22 @@
+# Core
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+sqlalchemy==2.0.40
+python-dotenv==1.1.0
+
+# Scraping
+python-jobspy==1.1.82
+apify-client==1.9.1
+
+# Data processing
+pandas==2.2.3
+rapidfuzz==3.13.0
+
+# Resume parsing
+pdfplumber==0.11.6
+
+# Scoring
+google-genai==1.14.0
+
+# Scheduling
+apscheduler==3.11.0
