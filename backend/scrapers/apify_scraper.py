@@ -22,7 +22,10 @@ from backend.config import (
     APIFY_MAX_ITEMS_PER_ACTOR,
     APIFY_ENABLE_BANKING_QUERIES,
     APIFY_CREDIT_WARNING_THRESHOLD,
-    APJFY_BANKING_SEARCH_VARIANTS,
+    APIFY_BANKING_SEARCH_VARIANTS,
+    APIFY_MAX_CITIES,
+    APIFY_MAX_PORTALS,
+    APIFY_PORTAL_PRIORITY,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +44,9 @@ class ApifyScraper(BaseScraper):
         max_items: int | None = None,
         enable_banking_queries: bool | None = None,
         credit_warning_threshold: float | None = None,
+        max_cities: int | None = None,
+        max_portals: int | None = None,
+        portal_priority: list[str] | None = None,
     ):
         """
         Args:
@@ -50,6 +56,9 @@ class ApifyScraper(BaseScraper):
             max_items: Maximum items to fetch per actor run.
             enable_banking_queries: Whether to also run banking-specific searches.
             credit_warning_threshold: Fraction (0-1) of credits used that triggers a warning.
+            max_cities: Top N cities from the caller's list that actually get scraped.
+            max_portals: Top N portals (by priority) that actually get run.
+            portal_priority: Order in which portals are selected when pruning.
         """
         self.api_token = api_token if api_token is not None else APIFY_API_TOKEN
         self.actors = actors if actors is not None else APIFY_ACTORS
@@ -65,9 +74,26 @@ class ApifyScraper(BaseScraper):
             if credit_warning_threshold is not None
             else APIFY_CREDIT_WARNING_THRESHOLD
         )
+        self.max_cities = max_cities if max_cities is not None else APIFY_MAX_CITIES
+        self.max_portals = max_portals if max_portals is not None else APIFY_MAX_PORTALS
+        self.portal_priority = (
+            portal_priority if portal_priority is not None else APIFY_PORTAL_PRIORITY
+        )
+
+        # Prune the actor map to the top-priority portals.
+        self.actors = self._prune_actors(self.actors)
 
         # Track credit usage across runs
         self._credit_usage_log: list[dict] = []
+
+    def _prune_actors(self, actors: dict) -> dict:
+        """Keep at most max_portals actors, selected by portal_priority order."""
+        if self.max_portals <= 0 or len(actors) <= self.max_portals:
+            return dict(actors)
+        ordered = [p for p in self.portal_priority if p in actors]
+        # Append any portals not in the priority list to keep them as fallback order.
+        ordered += [p for p in actors if p not in ordered]
+        return {p: actors[p] for p in ordered[: self.max_portals]}
 
     @property
     def is_configured(self) -> bool:
@@ -113,9 +139,20 @@ class ApifyScraper(BaseScraper):
         """
         all_jobs: list[RawJob] = []
 
+        # Phase 5: Cap cities to conserve Apify credits. Callers pass locations
+        # in priority order; we keep the first N.
+        effective_locations = (
+            locations[: self.max_cities] if self.max_cities > 0 else list(locations)
+        )
+        if len(effective_locations) < len(locations):
+            logger.info(
+                f"[apify] Pruned locations: {len(locations)} → {len(effective_locations)} "
+                f"(APIFY_MAX_CITIES={self.max_cities})"
+            )
+
         # Run base search terms
         for term in search_terms:
-            for loc in locations:
+            for loc in effective_locations:
                 try:
                     jobs = self.scrape(term, loc, results_wanted, hours_old)
                     all_jobs.extend(jobs)
@@ -124,13 +161,13 @@ class ApifyScraper(BaseScraper):
 
         # Phase 4.5: Run banking-specific queries for deeper coverage
         if self.enable_banking_queries:
-            banking_terms = APJFY_BANKING_SEARCH_VARIANTS
+            banking_terms = APIFY_BANKING_SEARCH_VARIANTS
             logger.info(
                 f"[apify] Running {len(banking_terms)} banking-specific queries "
-                f"across {len(locations)} locations"
+                f"across {len(effective_locations)} locations"
             )
             for term in banking_terms:
-                for loc in locations:
+                for loc in effective_locations:
                     try:
                         jobs = self.scrape(term, loc, results_wanted, hours_old)
                         all_jobs.extend(jobs)

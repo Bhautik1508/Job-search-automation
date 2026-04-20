@@ -175,6 +175,36 @@ class TestGeminiScorerScoring:
         assert result is None
 
     @patch("backend.scoring.gemini_scorer.GeminiScorer._get_client")
+    def test_score_job_truncates_long_jd(self, mock_get_client):
+        """JDs longer than GEMINI_JD_MAX_CHARS are truncated before the API call."""
+        mock_response = MagicMock()
+        mock_response.text = self._mock_response()
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        long_jd = "A" * 10_000  # Much larger than the 3000-char cap.
+
+        with patch("backend.scoring.gemini_scorer.types") as mock_types:
+            mock_types.GenerateContentConfig.return_value = MagicMock()
+            with patch("backend.scoring.gemini_scorer.GEMINI_JD_MAX_CHARS", 3000):
+                scorer = GeminiScorer(api_key="test_key", rpm_limit=100)
+                scorer.score_job(
+                    resume_text="resume",
+                    job_title="PM",
+                    company="Test",
+                    location="City",
+                    job_description=long_jd,
+                )
+
+        # Inspect the prompt that was actually sent.
+        _, kwargs = mock_client.models.generate_content.call_args
+        prompt = kwargs["contents"]
+        assert "[truncated]" in prompt
+        # Hard cap: the prompt shouldn't contain the full 10k chars.
+        assert prompt.count("A") <= 3000 + 10  # tolerance for wrapping chars
+
+    @patch("backend.scoring.gemini_scorer.GeminiScorer._get_client")
     def test_score_job_api_error(self, mock_get_client):
         mock_client = MagicMock()
         mock_client.models.generate_content.side_effect = Exception("API Error")

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import Job, get_engine, get_session_factory, init_db
 from backend.database.crud import get_unscored_jobs, update_job_scores
-from backend.resume.parser import ResumeParser
+from backend.resume.parser import ResumeParser, load_resume_text
 from backend.scoring.gemini_scorer import GeminiScorer, JobScoreResult, DailyQuotaExhausted
 from backend.scoring.company_classifier import CompanyClassifier
 from backend.config import BACKEND_DIR
@@ -44,16 +44,16 @@ class ScoringPipeline:
         db_url: str | None = None,
         batch_size: int = 15,
     ):
-        # Resume
+        # Resume — uses a mtime-keyed cache so repeated pipeline runs skip re-parsing.
         if resume_text:
             self._resume_text = resume_text
         elif resume_path:
-            self._resume_text = ResumeParser(resume_path).extract_text()
+            self._resume_text = load_resume_text(resume_path)
         else:
             # Default: look for resume in backend/resume/
             default_path = BACKEND_DIR / "resume" / "resume.pdf"
             if default_path.exists():
-                self._resume_text = ResumeParser(default_path).extract_text()
+                self._resume_text = load_resume_text(default_path)
             else:
                 self._resume_text = None
 

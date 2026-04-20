@@ -15,6 +15,34 @@ from pathlib import Path
 import pdfplumber
 
 
+# Process-level cache: {absolute_path: (mtime, cleaned_text)}
+# Invalidates automatically when the PDF is updated on disk.
+_RESUME_TEXT_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def load_resume_text(pdf_path: str | Path) -> str:
+    """
+    Extract resume text with a process-level cache keyed by file mtime.
+
+    Safe to call repeatedly: subsequent calls for an unchanged file skip
+    the pdfplumber parse entirely.
+    """
+    path = Path(pdf_path).resolve()
+    mtime = path.stat().st_mtime
+    key = str(path)
+    cached = _RESUME_TEXT_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    text = ResumeParser(path).extract_text()
+    _RESUME_TEXT_CACHE[key] = (mtime, text)
+    return text
+
+
+def clear_resume_cache() -> None:
+    """Clear the resume text cache. Intended for tests."""
+    _RESUME_TEXT_CACHE.clear()
+
+
 class ResumeParser:
     """Parse a PDF resume and extract its text content."""
 

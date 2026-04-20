@@ -13,6 +13,7 @@ from sqlalchemy import (
     Float,
     DateTime,
     Boolean,
+    Index,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -77,6 +78,18 @@ class Job(Base):
     # ---- Deduplication ----
     dedup_hash = Column(String(64), nullable=True, index=True, unique=True)
 
+    # Hot-path indexes for /api/jobs filters and /api/stats GROUP BYs.
+    # Kept in sync with Alembic revision 0002_indexes so init_db() on a
+    # fresh DB matches `alembic upgrade head`.
+    __table_args__ = (
+        Index("ix_jobs_relevancy_score", "relevancy_score"),
+        Index("ix_jobs_apply_priority", "apply_priority"),
+        Index("ix_jobs_company_type", "company_type"),
+        Index("ix_jobs_verdict", "verdict"),
+        Index("ix_jobs_date_scraped", "date_scraped"),
+        Index("ix_jobs_applied_relevancy", "applied", "relevancy_score"),
+    )
+
     def __repr__(self):
         return f"<Job(id={self.id}, title='{self.title}', company='{self.company}', source='{self.source_portal}')>"
 
@@ -108,8 +121,19 @@ class ScrapeScan(Base):
 # ------------------------------------------------------------------
 
 def get_engine(url: str | None = None):
-    """Create a SQLAlchemy engine."""
-    return create_engine(url or DATABASE_URL, echo=False)
+    """
+    Create a SQLAlchemy engine.
+
+    Adds `pool_pre_ping=True` for non-SQLite URLs so Postgres/MySQL
+    connections that have been closed by the server (e.g. idle-timeout
+    on managed DBs) are detected and recycled before use instead of
+    surfacing as mid-request errors.
+    """
+    target = url or DATABASE_URL
+    kwargs: dict = {"echo": False}
+    if not target.startswith("sqlite"):
+        kwargs["pool_pre_ping"] = True
+    return create_engine(target, **kwargs)
 
 
 def get_session_factory(engine=None):

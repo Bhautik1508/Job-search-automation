@@ -5,6 +5,7 @@ and stores them in the database.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from backend.scrapers.base_scraper import BaseScraper, RawJob
@@ -32,11 +33,13 @@ class ScraperOrchestrator:
         search_terms: list[str] | None = None,
         locations: list[str] | None = None,
         db_url: str | None = None,
+        parallel: bool = True,
     ):
         self.engines = engines or self._default_engines()
         self.search_terms = search_terms or SEARCH_VARIANTS
         self.locations = locations or TARGET_CITIES
         self.db_url = db_url
+        self.parallel = parallel
 
         # Init DB
         self._engine = get_engine(self.db_url)
@@ -69,26 +72,27 @@ class ScraperOrchestrator:
             raw_jobs = self._scrape_all_engines()
             print(f"\n📦 Total raw jobs collected: {len(raw_jobs)}")
 
-            # Step 2: Fuzzy-deduplicate in-memory
-            unique_jobs = deduplicate_jobs(raw_jobs)
-            print(f"🔍 After fuzzy dedup: {len(unique_jobs)} unique jobs")
-
-            # Step 2.5: Title relevancy filter — drop irrelevant roles
-            relevant_jobs = self._filter_relevant_titles(unique_jobs)
-            filtered_out = len(unique_jobs) - len(relevant_jobs)
+            # Step 2: Title relevancy filter FIRST — shrinks the set before the
+            # quadratic fuzzy-dedup step runs.
+            relevant_jobs = self._filter_relevant_titles(raw_jobs)
+            filtered_out = len(raw_jobs) - len(relevant_jobs)
             if filtered_out:
                 print(f"🚫 Filtered out {filtered_out} irrelevant titles (kept {len(relevant_jobs)})")
 
-            # Step 3: Assign dedup hashes and convert to DB models
-            db_jobs = [self._raw_to_db_job(j) for j in relevant_jobs]
+            # Step 3: Fuzzy-deduplicate in-memory
+            unique_jobs = deduplicate_jobs(relevant_jobs)
+            print(f"🔍 After fuzzy dedup: {len(unique_jobs)} unique jobs")
 
-            # Step 4: Insert into DB (skipping existing hashes)
+            # Step 4: Assign dedup hashes and convert to DB models
+            db_jobs = [self._raw_to_db_job(j) for j in unique_jobs]
+
+            # Step 5: Insert into DB (skipping existing hashes)
             jobs_new = bulk_insert_jobs(session, db_jobs)
             jobs_duplicate = len(db_jobs) - jobs_new
             print(f"✅ New jobs inserted: {jobs_new}")
             print(f"♻️  Duplicates skipped: {jobs_duplicate}")
 
-            # Step 5: Update scan record
+            # Step 6: Update scan record
             complete_scrape_scan(
                 session,
                 scan,
@@ -122,10 +126,17 @@ class ScraperOrchestrator:
     # ------------------------------------------------------------------
 
     def _scrape_all_engines(self) -> list[RawJob]:
-        """Run all engines and collect results."""
-        all_jobs: list[RawJob] = []
-        for engine in self.engines:
-            print(f"\n🔄 Running {engine.engine_name} scraper...")
+        """
+        Run all engines and collect results.
+
+        Engines are independent (different upstream services), so we run
+        them concurrently in a thread pool when `parallel=True`.
+        """
+        if not self.engines:
+            return []
+
+        def _run_one(engine: BaseScraper) -> list[RawJob]:
+            print(f"🔄 Running {engine.engine_name} scraper...")
             try:
                 jobs = engine.scrape_all(
                     search_terms=self.search_terms,
@@ -134,9 +145,22 @@ class ScraperOrchestrator:
                     hours_old=JOBSPY_HOURS_OLD,
                 )
                 print(f"   ↳ {engine.engine_name} returned {len(jobs)} jobs")
-                all_jobs.extend(jobs)
+                return jobs
             except Exception as e:
                 print(f"   ↳ {engine.engine_name} FAILED: {e}")
+                return []
+
+        if not self.parallel or len(self.engines) == 1:
+            all_jobs: list[RawJob] = []
+            for engine in self.engines:
+                all_jobs.extend(_run_one(engine))
+            return all_jobs
+
+        all_jobs = []
+        with ThreadPoolExecutor(max_workers=len(self.engines)) as pool:
+            futures = {pool.submit(_run_one, e): e for e in self.engines}
+            for fut in as_completed(futures):
+                all_jobs.extend(fut.result())
         return all_jobs
 
     def _get_portal_names(self) -> list[str]:

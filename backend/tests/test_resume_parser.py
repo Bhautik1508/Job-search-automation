@@ -10,7 +10,12 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from backend.resume.parser import ResumeParser, _clean_text
+from backend.resume.parser import (
+    ResumeParser,
+    _clean_text,
+    load_resume_text,
+    clear_resume_cache,
+)
 
 
 # ==================================================================
@@ -177,3 +182,59 @@ class TestResumeParserExtraction:
 
         parser = ResumeParser(pdf_file)
         assert parser.page_count() == 3
+
+
+# ==================================================================
+# Tests: load_resume_text cache
+# ==================================================================
+
+class TestLoadResumeTextCache:
+    def test_cache_hit_skips_extract(self, tmp_path):
+        """Second call for an unchanged file must not re-invoke pdfplumber."""
+        pdf_file = tmp_path / "resume.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 test")
+
+        clear_resume_cache()
+        with patch("backend.resume.parser.pdfplumber") as mock_plumber:
+            page = MagicMock()
+            page.extract_text.return_value = "Resume content"
+            mock_pdf = MagicMock()
+            mock_pdf.pages = [page]
+            mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
+            mock_pdf.__exit__ = MagicMock(return_value=False)
+            mock_plumber.open.return_value = mock_pdf
+
+            first = load_resume_text(pdf_file)
+            second = load_resume_text(pdf_file)
+
+            assert first == second == "Resume content"
+            # One parse, not two.
+            assert mock_plumber.open.call_count == 1
+
+    def test_cache_invalidates_on_mtime_change(self, tmp_path):
+        """Updating the PDF on disk forces a re-parse."""
+        pdf_file = tmp_path / "resume.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 v1")
+
+        clear_resume_cache()
+        with patch("backend.resume.parser.pdfplumber") as mock_plumber:
+            page = MagicMock()
+            page.extract_text.side_effect = ["V1", "V2"]
+            mock_pdf = MagicMock()
+            mock_pdf.pages = [page]
+            mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
+            mock_pdf.__exit__ = MagicMock(return_value=False)
+            mock_plumber.open.return_value = mock_pdf
+
+            first = load_resume_text(pdf_file)
+
+            # Force a different mtime.
+            import time as _t
+            _t.sleep(0.01)
+            pdf_file.write_bytes(b"%PDF-1.4 v2-updated")
+
+            second = load_resume_text(pdf_file)
+
+            assert first == "V1"
+            assert second == "V2"
+            assert mock_plumber.open.call_count == 2

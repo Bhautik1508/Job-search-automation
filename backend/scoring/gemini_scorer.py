@@ -15,7 +15,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from google.genai import types
 
-from backend.config import GEMINI_API_KEY, GEMINI_MODEL
+from backend.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_JD_MAX_CHARS
 from backend.scoring.prompts import SCORING_PROMPT
 
 
@@ -187,13 +187,18 @@ class GeminiScorer:
             print("⚠️  Gemini API key not configured. Skipping scoring.")
             return None
 
+        # Truncate long JDs to keep token cost bounded.
+        jd = job_description or "No description available"
+        if len(jd) > GEMINI_JD_MAX_CHARS:
+            jd = jd[:GEMINI_JD_MAX_CHARS].rstrip() + "… [truncated]"
+
         # Build prompt
         prompt = SCORING_PROMPT.format(
             resume_text=resume_text,
             job_title=job_title,
             company=company,
             location=location or "Not specified",
-            job_description=job_description or "No description available",
+            job_description=jd,
         )
 
         # Rate limit

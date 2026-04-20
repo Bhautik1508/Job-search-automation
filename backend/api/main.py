@@ -20,11 +20,12 @@ import threading
 import traceback
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from backend.config import API_KEY, CORS_EXTRA_ORIGINS, FRONTEND_URL, IS_PRODUCTION
 from backend.database.models import Job, get_engine, get_session_factory, init_db
 from backend.api.schemas import (
     JobResponse,
@@ -45,7 +46,11 @@ app = FastAPI(
     description="REST API for the Job Search Automation dashboard",
 )
 
-# CORS — allow frontend (local dev + Vercel production)
+# CORS — strict allowlist.
+# Dev origins are always present; prod only trusts FRONTEND_URL and any
+# explicit CORS_EXTRA_ORIGINS. We no longer accept any *.vercel.app preview —
+# that regex was wide enough that any attacker's preview deploy could send
+# credentialed requests.
 _cors_origins = [
     "http://localhost:5173",
     "http://localhost:5174",
@@ -53,19 +58,41 @@ _cors_origins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
 ]
-# Add production frontend URL if set
-_frontend_url = os.getenv("FRONTEND_URL", "")
-if _frontend_url:
-    _cors_origins.append(_frontend_url)
+if FRONTEND_URL:
+    _cors_origins.append(FRONTEND_URL)
+_cors_origins.extend(CORS_EXTRA_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",  # All Vercel preview deploys
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+# ------------------------------------------------------------------
+# API key dependency — protects mutation endpoints.
+# ------------------------------------------------------------------
+
+def require_api_key(x_api_key: str | None = Header(default=None)):
+    """
+    Reject requests without a matching `X-API-Key` header.
+
+    - In production with no API_KEY configured → 503 (fail closed — refuse to
+      expose mutation endpoints unauthenticated rather than silently open).
+    - In dev with no API_KEY configured → pass (keeps local loops fast).
+    - Otherwise → require exact match.
+    """
+    if not API_KEY:
+        if IS_PRODUCTION:
+            raise HTTPException(
+                status_code=503,
+                detail="API_KEY is not configured on this server.",
+            )
+        return  # dev mode — auth disabled
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
 
 # DB — lazy init
 _engine = None
@@ -183,7 +210,7 @@ def get_job(job_id: int):
         session.close()
 
 
-@app.patch("/api/jobs/{job_id}/applied")
+@app.patch("/api/jobs/{job_id}/applied", dependencies=[Depends(require_api_key)])
 def toggle_applied(job_id: int, applied: bool = Query(True)):
     """Mark or unmark a job as applied."""
     session = _get_session()
@@ -205,36 +232,57 @@ def toggle_applied(job_id: int, applied: bool = Query(True)):
 
 @app.get("/api/stats", response_model=StatsResponse)
 def get_stats():
-    """Dashboard KPI summary."""
+    """
+    Dashboard KPI summary.
+
+    Uses three aggregated queries instead of ~10 scalar COUNTs:
+      1. Scalar aggregates (total, scored, applied, avg/max/min score).
+      2. GROUP BY apply_priority.
+      3. GROUP BY company_type.
+      4. GROUP BY verdict.
+    """
     session = _get_session()
     try:
-        total_jobs = session.query(Job).count()
-        scored_jobs = session.query(Job).filter(Job.relevancy_score.isnot(None)).count()
+        # Query 1: scalar aggregates in one round-trip
+        scored_predicate = Job.relevancy_score.isnot(None)
+        scalars = session.query(
+            func.count(Job.id),
+            func.sum(case((scored_predicate, 1), else_=0)),
+            func.sum(case((Job.applied == True, 1), else_=0)),
+            func.avg(case((scored_predicate, Job.relevancy_score))),
+            func.max(case((scored_predicate, Job.relevancy_score))),
+            func.min(case((scored_predicate, Job.relevancy_score))),
+        ).one()
+
+        total_jobs = scalars[0] or 0
+        scored_jobs = int(scalars[1] or 0)
+        applied_count = int(scalars[2] or 0)
+        avg_score = round(scalars[3] or 0, 1)
+        max_score = round(scalars[4] or 0, 1)
+        min_score = round(scalars[5] or 0, 1)
         unscored_jobs = total_jobs - scored_jobs
 
-        # Score aggregates
-        score_agg = session.query(
-            func.avg(Job.relevancy_score),
-            func.max(Job.relevancy_score),
-            func.min(Job.relevancy_score),
-        ).filter(Job.relevancy_score.isnot(None)).first()
+        # Query 2: priority breakdown
+        prio_rows = (
+            session.query(Job.apply_priority, func.count(Job.id))
+            .filter(Job.apply_priority.isnot(None))
+            .group_by(Job.apply_priority)
+            .all()
+        )
+        prio_counts = {p: c for p, c in prio_rows}
+        by_priority = [PriorityCount(priority=p, count=c) for p, c in prio_rows]
 
-        avg_score = round(score_agg[0] or 0, 1)
-        max_score = round(score_agg[1] or 0, 1)
-        min_score = round(score_agg[2] or 0, 1)
+        # Query 3: company-type breakdown
+        ctype_rows = (
+            session.query(Job.company_type, func.count(Job.id))
+            .filter(Job.company_type.isnot(None))
+            .group_by(Job.company_type)
+            .all()
+        )
+        ctype_counts = {ct: c for ct, c in ctype_rows}
+        by_company_type = [CompanyTypeCount(company_type=ct, count=c) for ct, c in ctype_rows]
 
-        # Priority counts
-        apply_now = session.query(Job).filter(Job.apply_priority == "APPLY_NOW").count()
-        review_first = session.query(Job).filter(Job.apply_priority == "REVIEW_FIRST").count()
-        skip = session.query(Job).filter(Job.apply_priority == "SKIP").count()
-
-        # Company type counts
-        fintech = session.query(Job).filter(Job.company_type == "fintech").count()
-        bank = session.query(Job).filter(Job.company_type == "bank").count()
-        nbfc = session.query(Job).filter(Job.company_type == "nbfc").count()
-        other = session.query(Job).filter(Job.company_type == "other").count()
-
-        # By-verdict breakdown
+        # Query 4: verdict breakdown
         verdict_rows = (
             session.query(Job.verdict, func.count(Job.id))
             .filter(Job.verdict.isnot(None))
@@ -243,26 +291,6 @@ def get_stats():
         )
         by_verdict = [VerdictCount(verdict=v, count=c) for v, c in verdict_rows]
 
-        # By-company-type breakdown
-        ctype_rows = (
-            session.query(Job.company_type, func.count(Job.id))
-            .filter(Job.company_type.isnot(None))
-            .group_by(Job.company_type)
-            .all()
-        )
-        by_company_type = [CompanyTypeCount(company_type=ct, count=c) for ct, c in ctype_rows]
-
-        # By-priority breakdown
-        prio_rows = (
-            session.query(Job.apply_priority, func.count(Job.id))
-            .filter(Job.apply_priority.isnot(None))
-            .group_by(Job.apply_priority)
-            .all()
-        )
-        by_priority = [PriorityCount(priority=p, count=c) for p, c in prio_rows]
-
-        applied_count = session.query(Job).filter(Job.applied == True).count()
-
         return StatsResponse(
             total_jobs=total_jobs,
             scored_jobs=scored_jobs,
@@ -270,13 +298,13 @@ def get_stats():
             avg_score=avg_score,
             max_score=max_score,
             min_score=min_score,
-            apply_now_count=apply_now,
-            review_first_count=review_first,
-            skip_count=skip,
-            fintech_count=fintech,
-            bank_count=bank,
-            nbfc_count=nbfc,
-            other_count=other,
+            apply_now_count=prio_counts.get("APPLY_NOW", 0),
+            review_first_count=prio_counts.get("REVIEW_FIRST", 0),
+            skip_count=prio_counts.get("SKIP", 0),
+            fintech_count=ctype_counts.get("fintech", 0),
+            bank_count=ctype_counts.get("bank", 0),
+            nbfc_count=ctype_counts.get("nbfc", 0),
+            other_count=ctype_counts.get("other", 0),
             by_verdict=by_verdict,
             by_company_type=by_company_type,
             by_priority=by_priority,
@@ -362,7 +390,7 @@ def _run_score():
         traceback.print_exc()
 
 
-@app.post("/api/scrape")
+@app.post("/api/scrape", dependencies=[Depends(require_api_key)])
 def trigger_scrape():
     """Trigger a scrape cycle in the background."""
     with _action_lock:
@@ -378,7 +406,7 @@ def trigger_scrape():
     return {"status": "started", "message": "Scrape started in background."}
 
 
-@app.post("/api/score")
+@app.post("/api/score", dependencies=[Depends(require_api_key)])
 def trigger_score():
     """Trigger scoring of all unscored jobs in the background."""
     with _action_lock:

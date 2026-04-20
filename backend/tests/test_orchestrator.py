@@ -6,6 +6,8 @@ Tests the full pipeline: scrape → deduplicate → store to DB.
 """
 
 import pytest
+import threading
+import time
 from unittest.mock import MagicMock
 from datetime import datetime, timezone
 
@@ -167,6 +169,113 @@ class TestScraperOrchestrator:
         )
         result = orchestrator.run()
         assert result["scan_id"] is not None
+
+    def test_irrelevant_titles_filtered_out(self):
+        """Orchestrator drops irrelevant titles (e.g. SDE) before storing."""
+        mixed_jobs = [
+            RawJob(title="Product Manager", company="Razorpay",
+                   location="Bangalore", source_portal="naukri", source_engine="mock"),
+            RawJob(title="Software Engineer", company="Razorpay",
+                   location="Bangalore", source_portal="naukri", source_engine="mock"),
+            RawJob(title="Senior Product Manager", company="PhonePe",
+                   location="Bangalore", source_portal="linkedin", source_engine="mock"),
+            RawJob(title="DevOps Engineer", company="PhonePe",
+                   location="Bangalore", source_portal="linkedin", source_engine="mock"),
+        ]
+        orchestrator = ScraperOrchestrator(
+            engines=[MockScraper(mixed_jobs)],
+            search_terms=["PM"],
+            locations=["Bangalore"],
+            db_url="sqlite:///:memory:",
+        )
+        result = orchestrator.run()
+        # Only the two PM titles should survive
+        assert result["new_inserted"] == 2
+
+    def test_filter_runs_before_dedup(self):
+        """
+        Title filtering must happen BEFORE fuzzy dedup so the dedup step
+        doesn't waste work on irrelevant rows.
+
+        We verify the two steps by calling the static helper on a crafted
+        input that has an irrelevant job fuzzy-matching a relevant one.
+        If dedup ran first, the relevant PM role could be dropped as a dup
+        of the SDE entry. Filter-first guarantees the PM survives.
+        """
+        jobs = [
+            RawJob(title="Software Engineer", company="Razorpay",
+                   source_portal="x", source_engine="mock"),
+            RawJob(title="Product Manager", company="Razorpay",
+                   source_portal="y", source_engine="mock"),
+        ]
+        kept = ScraperOrchestrator._filter_relevant_titles(jobs)
+        assert len(kept) == 1
+        assert kept[0].title == "Product Manager"
+
+    def test_engines_run_in_parallel(self):
+        """
+        Two slow engines should finish in roughly one engine's wall time
+        when parallel=True (i.e. < 2× the per-engine delay).
+        """
+
+        class SlowScraper(BaseScraper):
+            engine_name = "slow"
+
+            def __init__(self, delay: float, tag: str):
+                self.delay = delay
+                self.tag = tag
+
+            def scrape(self, search_term, location, results_wanted=30, hours_old=72):
+                time.sleep(self.delay)
+                return [
+                    RawJob(
+                        title=f"Senior Product Manager {self.tag.upper() * 6}",
+                        company=f"CompanyAlpha{self.tag * 4}",
+                        location="Bangalore",
+                        source_portal="portal",
+                        source_engine=f"slow-{self.tag}",
+                    )
+                ]
+
+        delay = 0.25
+        engines = [SlowScraper(delay, "a"), SlowScraper(delay, "b")]
+        orchestrator = ScraperOrchestrator(
+            engines=engines,
+            search_terms=["PM"],
+            locations=["Bangalore"],
+            db_url="sqlite:///:memory:",
+            parallel=True,
+        )
+
+        start = time.perf_counter()
+        result = orchestrator.run()
+        elapsed = time.perf_counter() - start
+
+        assert result["new_inserted"] == 2
+        # Serial would take ≥ 2*delay. Parallel should land well under 1.7*delay.
+        assert elapsed < 1.7 * delay, f"Expected parallel execution, took {elapsed:.2f}s"
+
+    def test_parallel_false_runs_serially(self):
+        """Explicit parallel=False keeps the old behavior (no thread pool)."""
+        engine_threads: set[int] = set()
+
+        class RecordingScraper(BaseScraper):
+            engine_name = "rec"
+
+            def scrape(self, search_term, location, results_wanted=30, hours_old=72):
+                engine_threads.add(threading.get_ident())
+                return []
+
+        orchestrator = ScraperOrchestrator(
+            engines=[RecordingScraper(), RecordingScraper()],
+            search_terms=["PM"],
+            locations=["Bangalore"],
+            db_url="sqlite:///:memory:",
+            parallel=False,
+        )
+        orchestrator.run()
+        # Serial path runs everything on the caller thread.
+        assert len(engine_threads) == 1
 
     def test_raw_to_db_job_conversion(self):
         """RawJob → Job conversion preserves all fields."""

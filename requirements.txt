@@ -22,5 +22,12 @@ google-genai==1.14.0
 # Scheduling
 apscheduler==3.11.0
 
+# Migrations
+alembic==1.14.0
+
+# Postgres driver — install when DATABASE_URL points to Postgres.
+# Left as a comment so SQLite-only deployments don't pull it in.
+# psycopg2-binary==2.9.10
+
 # Testing
 pytest==8.3.5

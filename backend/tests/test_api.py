@@ -431,3 +431,93 @@ class TestStats:
 
         resp = client.get("/api/stats")
         assert resp.json()["applied_count"] == 1
+
+    def test_stats_uses_few_queries(self, client, seeded_db):
+        """
+        Regression test: /api/stats should use ≤4 SELECT queries.
+        The pre-optimization version fired ~10 separate COUNTs.
+        """
+        select_count = 0
+
+        def _on_statement(conn, cursor, statement, parameters, context, executemany):
+            nonlocal select_count
+            if statement.strip().upper().startswith("SELECT"):
+                select_count += 1
+
+        event.listen(_test_engine, "before_cursor_execute", _on_statement)
+        try:
+            resp = client.get("/api/stats")
+        finally:
+            event.remove(_test_engine, "before_cursor_execute", _on_statement)
+
+        assert resp.status_code == 200
+        assert select_count <= 4, f"Expected ≤4 SELECTs, got {select_count}"
+
+
+# ==================================================================
+# Tests: API-key auth on mutation endpoints
+# ==================================================================
+
+class TestApiKeyAuth:
+    """
+    Verify the X-API-Key dependency on /api/scrape, /api/score and PATCH
+    /api/jobs/*/applied. Default test env has API_KEY unset AND
+    IS_PRODUCTION=False, so auth falls through — which we already exercised
+    in the mutation tests above. Here we cover the three other states:
+
+      1. API_KEY set, request missing header → 401
+      2. API_KEY set, request wrong header   → 401
+      3. API_KEY set, request correct header → 200
+      4. API_KEY unset + IS_PRODUCTION=True  → 503 (fail closed)
+    """
+
+    def _patch_key(self, monkeypatch, key: str, production: bool = False):
+        monkeypatch.setattr(api_main, "API_KEY", key)
+        monkeypatch.setattr(api_main, "IS_PRODUCTION", production)
+
+    def test_missing_key_rejected(self, client, seeded_db, monkeypatch):
+        self._patch_key(monkeypatch, "secret-abc")
+        job_id = seeded_db[0].id
+        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        assert resp.status_code == 401
+
+    def test_wrong_key_rejected(self, client, seeded_db, monkeypatch):
+        self._patch_key(monkeypatch, "secret-abc")
+        job_id = seeded_db[0].id
+        resp = client.patch(
+            f"/api/jobs/{job_id}/applied?applied=true",
+            headers={"X-API-Key": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    def test_correct_key_accepted(self, client, seeded_db, monkeypatch):
+        self._patch_key(monkeypatch, "secret-abc")
+        job_id = seeded_db[0].id
+        resp = client.patch(
+            f"/api/jobs/{job_id}/applied?applied=true",
+            headers={"X-API-Key": "secret-abc"},
+        )
+        assert resp.status_code == 200
+
+    def test_production_without_key_fails_closed(
+        self, client, seeded_db, monkeypatch
+    ):
+        """Missing API_KEY in production must block mutations (503)."""
+        self._patch_key(monkeypatch, "", production=True)
+        job_id = seeded_db[0].id
+        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        assert resp.status_code == 503
+
+    def test_dev_mode_without_key_is_open(self, client, seeded_db, monkeypatch):
+        """Dev convenience: empty API_KEY + not production → auth disabled."""
+        self._patch_key(monkeypatch, "", production=False)
+        job_id = seeded_db[0].id
+        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        assert resp.status_code == 200
+
+    def test_read_endpoints_never_require_key(self, client, seeded_db, monkeypatch):
+        """GETs must stay open regardless of auth config."""
+        self._patch_key(monkeypatch, "secret-abc")
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/jobs").status_code == 200
+        assert client.get("/api/stats").status_code == 200

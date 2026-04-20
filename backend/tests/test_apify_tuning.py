@@ -456,6 +456,70 @@ class TestItemToRawJob:
 
 
 # ==================================================================
+# Tests: Fan-out pruning (Phase 5)
+# ==================================================================
+
+class TestFanOutPruning:
+    def test_portal_pruning_keeps_top_priority(self):
+        """max_portals keeps only the top-N portals by priority order."""
+        scraper = ApifyScraper(
+            api_token="test",
+            actors={
+                "linkedin": "a1",
+                "naukri": "a2",
+                "indeed": "a3",
+                "glassdoor": "a4",
+            },
+            max_portals=2,
+            portal_priority=["linkedin", "naukri", "indeed", "glassdoor"],
+        )
+        assert set(scraper.actors.keys()) == {"linkedin", "naukri"}
+
+    def test_portal_pruning_respects_custom_priority(self):
+        """Custom priority order changes which portals survive pruning."""
+        scraper = ApifyScraper(
+            api_token="test",
+            actors={
+                "linkedin": "a1",
+                "naukri": "a2",
+                "indeed": "a3",
+                "glassdoor": "a4",
+            },
+            max_portals=2,
+            portal_priority=["glassdoor", "indeed", "linkedin", "naukri"],
+        )
+        assert set(scraper.actors.keys()) == {"glassdoor", "indeed"}
+
+    def test_no_pruning_when_max_portals_zero(self):
+        """max_portals=0 is treated as unlimited."""
+        actors = {"linkedin": "a1", "naukri": "a2", "indeed": "a3", "glassdoor": "a4"}
+        scraper = ApifyScraper(api_token="test", actors=actors, max_portals=0)
+        assert set(scraper.actors.keys()) == set(actors.keys())
+
+    @patch.object(ApifyScraper, "scrape")
+    @patch.object(ApifyScraper, "_check_credit_usage")
+    def test_max_cities_caps_locations(self, mock_credit, mock_scrape):
+        """scrape_all only uses the first `max_cities` locations."""
+        mock_scrape.return_value = []
+        mock_credit.return_value = None
+
+        scraper = ApifyScraper(
+            api_token="test",
+            enable_banking_queries=False,
+            max_cities=2,
+        )
+        scraper.scrape_all(
+            search_terms=["PM"],
+            locations=["Bangalore", "Mumbai", "Delhi", "Pune", "Hyderabad"],
+        )
+
+        # 1 term × 2 capped locations = 2 calls (not 5)
+        assert mock_scrape.call_count == 2
+        locs_used = {c.args[1] for c in mock_scrape.call_args_list}
+        assert locs_used == {"Bangalore", "Mumbai"}
+
+
+# ==================================================================
 # Tests: _run_actor with mocked ApifyClient
 # ==================================================================
 

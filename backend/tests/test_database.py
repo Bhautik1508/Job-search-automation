@@ -226,6 +226,52 @@ class TestCrudJobs:
         assert inserted == 1
         assert count_jobs(db_session) == 2
 
+    def test_bulk_insert_dedupes_within_batch(self, db_session):
+        """Duplicates in the same batch collapse to a single row."""
+        jobs = [
+            _make_job(title="Dup", dedup_hash="dup_hash"),
+            _make_job(title="Dup", dedup_hash="dup_hash"),
+            _make_job(title="Other", dedup_hash="other_hash"),
+        ]
+        inserted = bulk_insert_jobs(db_session, jobs)
+        assert inserted == 2
+        assert count_jobs(db_session) == 2
+
+    def test_bulk_insert_empty_list(self, db_session):
+        """Empty input returns 0 and does not hit the DB."""
+        assert bulk_insert_jobs(db_session, []) == 0
+        assert count_jobs(db_session) == 0
+
+    def test_bulk_insert_uses_single_lookup_query(self, db_session):
+        """
+        Regression test: existing-hash lookup should be a single batched
+        query, not one-per-job. We assert by counting SELECTs fired.
+        """
+        from sqlalchemy import event
+
+        # Seed an existing row so the lookup path is exercised.
+        insert_job(db_session, _make_job(dedup_hash="seeded"))
+
+        select_count = 0
+
+        def _on_statement(conn, cursor, statement, parameters, context, executemany):
+            nonlocal select_count
+            if statement.strip().upper().startswith("SELECT"):
+                select_count += 1
+
+        engine = db_session.get_bind()
+        event.listen(engine, "before_cursor_execute", _on_statement)
+        try:
+            jobs = [
+                _make_job(title=f"J{i}", dedup_hash=f"batch_{i}") for i in range(20)
+            ]
+            bulk_insert_jobs(db_session, jobs)
+        finally:
+            event.remove(engine, "before_cursor_execute", _on_statement)
+
+        # At most one SELECT for the dedup-hash lookup. (Not N=20.)
+        assert select_count <= 2, f"Expected batched lookup, got {select_count} SELECTs"
+
 
 # ==================================================================
 # Tests: CRUD ScrapeScan
@@ -265,3 +311,38 @@ class TestCrudScrapeScan:
             create_scrape_scan(db_session, engine=f"engine_{i}")
         scans = get_recent_scans(db_session, limit=3)
         assert len(scans) == 3
+
+
+# ==================================================================
+# Tests: get_engine Postgres-readiness
+# ==================================================================
+
+class TestGetEngine:
+    def test_sqlite_engine_skips_pool_pre_ping(self):
+        """SQLite doesn't need pool_pre_ping — keep the engine kwargs minimal."""
+        from backend.database.models import get_engine
+
+        engine = get_engine("sqlite:///:memory:")
+        # SQLAlchemy exposes pool_pre_ping on the engine's pool as `_pre_ping`.
+        assert getattr(engine.pool, "_pre_ping", False) is False
+
+    def test_non_sqlite_engine_enables_pool_pre_ping(self, monkeypatch):
+        """
+        For Postgres/MySQL we must pre-ping to survive managed-DB idle timeouts.
+        We can't actually connect to Postgres in CI (no driver installed), so we
+        patch create_engine and assert get_engine passed pool_pre_ping=True.
+        """
+        from backend.database import models
+
+        captured: dict = {}
+
+        def fake_create_engine(url, **kwargs):
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return object()
+
+        monkeypatch.setattr(models, "create_engine", fake_create_engine)
+        models.get_engine("postgresql+psycopg2://u:p@localhost/nope")
+
+        assert captured["kwargs"].get("pool_pre_ping") is True
+        assert captured["kwargs"].get("echo") is False

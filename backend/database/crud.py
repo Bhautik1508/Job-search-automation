@@ -44,15 +44,37 @@ def insert_job(session: Session, job: Job) -> Job:
 
 
 def bulk_insert_jobs(session: Session, jobs: list[Job]) -> int:
-    """Insert multiple jobs. Returns count of successfully inserted jobs."""
-    inserted = 0
+    """
+    Insert multiple jobs, skipping any whose dedup_hash already exists.
+    Returns the count of newly inserted jobs.
+
+    Uses a single batched `IN` query to find existing hashes, avoiding
+    an N+1 lookup over the jobs list.
+    """
+    if not jobs:
+        return 0
+
+    # Dedupe input by hash first — protects against duplicates within the batch.
+    seen: set[str] = set()
+    candidates: list[Job] = []
     for job in jobs:
-        existing = get_job_by_dedup_hash(session, job.dedup_hash)
-        if existing is None:
-            session.add(job)
-            inserted += 1
-    session.commit()
-    return inserted
+        if job.dedup_hash and job.dedup_hash not in seen:
+            seen.add(job.dedup_hash)
+            candidates.append(job)
+
+    # One query to find which hashes are already in the DB.
+    existing_hashes = {
+        row[0]
+        for row in session.query(Job.dedup_hash)
+        .filter(Job.dedup_hash.in_(list(seen)))
+        .all()
+    }
+
+    to_insert = [j for j in candidates if j.dedup_hash not in existing_hashes]
+    if to_insert:
+        session.bulk_save_objects(to_insert)
+        session.commit()
+    return len(to_insert)
 
 
 def count_jobs(session: Session) -> int:
