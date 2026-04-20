@@ -4,9 +4,8 @@
  * In development: VITE_API_URL is empty, requests use Vite proxy (/api/...).
  * In production:  VITE_API_URL is the Render backend URL (https://xxx.onrender.com).
  *
- * Mutation endpoints (/api/scrape, /api/score, PATCH /api/jobs/*/applied)
- * require an X-API-Key header in production. The key is injected from
- * VITE_API_KEY at build time.
+ * Mutation endpoints require an X-API-Key header in production. The key is
+ * injected from VITE_API_KEY at build time.
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
