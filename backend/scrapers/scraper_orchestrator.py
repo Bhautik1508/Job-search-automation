@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from backend.scrapers.base_scraper import BaseScraper, RawJob
 from backend.scrapers.jobspy_scraper import JobSpyScraper
 from backend.scrapers.apify_scraper import ApifyScraper
+from backend.scrapers.instahyre_scraper import InstahyreScraper
 from backend.utils.deduplicator import compute_dedup_hash, deduplicate_jobs
 from backend.database.models import Job, init_db, get_engine, get_session_factory
 from backend.database.crud import create_scrape_scan, complete_scrape_scan, bulk_insert_jobs
@@ -32,7 +33,7 @@ class ScraperOrchestrator:
         locations: list[str] | None = None,
         db_url: str | None = None,
     ):
-        self.engines = engines or [JobSpyScraper(), ApifyScraper()]
+        self.engines = engines or self._default_engines()
         self.search_terms = search_terms or SEARCH_VARIANTS
         self.locations = locations or TARGET_CITIES
         self.db_url = db_url
@@ -146,7 +147,27 @@ class ScraperOrchestrator:
                 portals.update(engine.SITE_MAP.values())
             elif hasattr(engine, "actors"):
                 portals.update(engine.actors.keys())
+            elif engine.engine_name == "instahyre":
+                portals.add("instahyre")
         return sorted(portals)
+
+    @staticmethod
+    def _default_engines() -> list[BaseScraper]:
+        """
+        Build the default set of scraper engines.
+
+        Instahyre is only included if credentials are configured,
+        to avoid login failures cluttering the logs.
+        """
+        engines: list[BaseScraper] = [JobSpyScraper(), ApifyScraper()]
+
+        instahyre = InstahyreScraper()
+        if instahyre.is_configured:
+            engines.append(instahyre)
+        else:
+            print("[orchestrator] Instahyre credentials not configured — skipping.")
+
+        return engines
 
     @staticmethod
     def _filter_relevant_titles(jobs: list[RawJob]) -> list[RawJob]:

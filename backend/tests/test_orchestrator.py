@@ -66,7 +66,7 @@ MOCK_JOBS = [
     RawJob(title="Product Manager - Lending", company="CRED", location="Mumbai",
            source_portal="indeed", source_engine="mock",
            description="Credit products", job_url="https://cred.club/pm"),
-    RawJob(title="PM - Digital Banking", company="HDFC Bank", location="Mumbai",
+    RawJob(title="Product Manager - Digital Banking", company="HDFC Bank", location="Mumbai",
            source_portal="naukri", source_engine="mock",
            description="Digital transformation", job_url="https://hdfc.com/pm"),
 ]

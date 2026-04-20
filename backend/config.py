@@ -68,6 +68,18 @@ SEARCH_VARIANTS = [
     "Senior Product Manager",
 ]
 
+# Phase 4.5: Banking-specific search variants (used by Apify only — more targeted)
+# These are run in addition to the base SEARCH_VARIANTS for deeper fintech/banking coverage.
+APJFY_BANKING_SEARCH_VARIANTS = [
+    "Product Manager Fintech",
+    "Product Manager Banking",
+    "Product Manager Payments",
+    "Product Manager Digital Banking",
+    "Product Manager Lending",
+    "PM UPI",
+    "PM Credit Cards",
+]
+
 # ------------------------------------------------------------------
 # Title relevancy filter (post-scrape)
 # ------------------------------------------------------------------
@@ -157,6 +169,12 @@ APIFY_ACTORS = {
     "glassdoor": "bebity~glassdoor-scraper",  # Glassdoor Scraper
 }
 
+# Phase 4.5: Apify Actor tuning — portal-specific timeouts & limits
+APIFY_ACTOR_TIMEOUT = int(os.getenv("APIFY_ACTOR_TIMEOUT", "180"))   # seconds
+APIFY_MAX_ITEMS_PER_ACTOR = int(os.getenv("APIFY_MAX_ITEMS", "50"))  # items per actor run
+APIFY_ENABLE_BANKING_QUERIES = os.getenv("APIFY_ENABLE_BANKING_QUERIES", "true").lower() == "true"
+APIFY_CREDIT_WARNING_THRESHOLD = float(os.getenv("APIFY_CREDIT_WARNING", "0.50"))  # warn when 50% used
+
 # ------------------------------------------------------------------
 # Gemini (Phase 2)
 # ------------------------------------------------------------------
@@ -180,6 +198,15 @@ RESUME_PATH = os.getenv("RESUME_PATH", str(BACKEND_DIR / "resume" / "resume.pdf"
 # ------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ------------------------------------------------------------------
+# Instahyre (Phase 4.4)
+# ------------------------------------------------------------------
+INSTAHYRE_EMAIL = os.getenv("INSTAHYRE_EMAIL", "")
+INSTAHYRE_PASSWORD = os.getenv("INSTAHYRE_PASSWORD", "")
+INSTAHYRE_HEADLESS = os.getenv("INSTAHYRE_HEADLESS", "true").lower() == "true"
+INSTAHYRE_TIMEOUT_MS = int(os.getenv("INSTAHYRE_TIMEOUT_MS", "30000"))
+INSTAHYRE_MAX_PAGES = int(os.getenv("INSTAHYRE_MAX_PAGES", "5"))
 
 # ------------------------------------------------------------------
 # JobSpy rate-limit settings
