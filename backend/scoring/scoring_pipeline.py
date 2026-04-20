@@ -24,6 +24,7 @@ from backend.database.crud import get_unscored_jobs, update_job_scores
 from backend.resume.parser import ResumeParser, load_resume_text
 from backend.scoring.gemini_scorer import GeminiScorer, JobScoreResult, DailyQuotaExhausted
 from backend.scoring.company_classifier import CompanyClassifier
+from backend.scoring.tier_classifier import TierClassifier
 from backend.config import BACKEND_DIR
 
 
@@ -41,6 +42,7 @@ class ScoringPipeline:
         resume_text: str | None = None,
         scorer: GeminiScorer | None = None,
         classifier: CompanyClassifier | None = None,
+        tier_classifier: TierClassifier | None = None,
         db_url: str | None = None,
         batch_size: int = 15,
     ):
@@ -60,6 +62,7 @@ class ScoringPipeline:
         # Scorer
         self.scorer = scorer or GeminiScorer()
         self.classifier = classifier or CompanyClassifier()
+        self.tier_classifier = tier_classifier or TierClassifier()
         self.batch_size = batch_size
 
         # DB
@@ -115,12 +118,17 @@ class ScoringPipeline:
                 print(f"\n[{i + 1}/{total}] Scoring: {job.title} @ {job.company}")
 
                 try:
-                    # Classify company
+                    # Classify company (domain + tier)
                     company_type, confidence = self.classifier.classify(job.company or "")
                     domain_bonus = self.classifier.get_domain_bonus(company_type)
 
+                    tier_profile = self.tier_classifier.classify(job.company or "")
+                    tier_bonus = self.tier_classifier.get_tier_bonus(tier_profile.tier)
+
                     if company_type != "other":
                         print(f"   🏦 Company type: {company_type} (confidence: {confidence:.2f})")
+                    if tier_profile.tier != "other":
+                        print(f"   🏷️  Tier: {tier_profile.tier} ({tier_profile.stage}, {tier_profile.headcount})")
 
                     # Compute recency score
                     hours_since = self._hours_since_posted(job.date_posted)
@@ -140,9 +148,13 @@ class ScoringPipeline:
                         failed += 1
                         continue
 
-                    # Compute final weighted score
+                    # Compute final weighted score.
+                    # Domain bonus (fintech/bank) and tier bonus (top_tier/unicorn)
+                    # both push relevancy upward. Capped at 100 inside the scorer.
                     final_score = self.scorer.compute_final_score(
-                        result, recency_score=recency, domain_bonus=domain_bonus,
+                        result,
+                        recency_score=recency,
+                        domain_bonus=domain_bonus + tier_bonus,
                     )
 
                     # Update DB
@@ -160,6 +172,9 @@ class ScoringPipeline:
                         score_reasoning=result.reasoning,
                         missing_skills=", ".join(result.missing_skills),
                         company_type=company_type,
+                        company_tier=tier_profile.tier,
+                        funding_stage=tier_profile.stage,
+                        headcount_band=tier_profile.headcount,
                     )
 
                     print(f"   ✅ Score: {final_score} | {result.verdict} | {result.apply_priority}")

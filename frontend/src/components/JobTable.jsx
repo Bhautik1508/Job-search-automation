@@ -101,7 +101,23 @@ export default function JobTable({
                     <span className="job-table__location">📍 {job.location}</span>
                   )}
                 </td>
-                <td className="job-table__company">{job.company}</td>
+                <td className="job-table__company">
+                  <span>{job.company}</span>
+                  {job.company_tier && job.company_tier !== 'other' && (
+                    <span
+                      className="badge"
+                      style={{
+                        marginLeft: 6,
+                        background: getTierBackground(job.company_tier),
+                        color: 'var(--text-strong)',
+                        fontSize: '0.65rem',
+                      }}
+                      title={`${formatLabel(job.company_tier)}${job.funding_stage ? ' · ' + job.funding_stage : ''}`}
+                    >
+                      {getTierIcon(job.company_tier)} {formatLabel(job.company_tier)}
+                    </span>
+                  )}
+                </td>
                 <td>
                   {job.company_type && (
                     <span className="badge" style={{
@@ -197,6 +213,26 @@ function getVerdictClass(v) {
 function getPriorityClass(p) {
   const map = { APPLY_NOW: 'apply', REVIEW_FIRST: 'review', SKIP: 'skip' }
   return map[p] || 'skip'
+}
+
+function getTierIcon(t) {
+  const map = {
+    top_tier: '🌟',
+    unicorn: '🦄',
+    growth_startup: '📈',
+    early_startup: '🌱',
+  }
+  return map[t] || ''
+}
+
+function getTierBackground(t) {
+  const map = {
+    top_tier: 'rgba(245, 158, 11, 0.18)',
+    unicorn: 'rgba(168, 85, 247, 0.18)',
+    growth_startup: 'rgba(16, 185, 129, 0.18)',
+    early_startup: 'rgba(14, 165, 233, 0.18)',
+  }
+  return map[t] || 'rgba(148, 163, 184, 0.18)'
 }
 
 function formatLabel(s) {

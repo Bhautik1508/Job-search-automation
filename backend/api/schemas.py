@@ -33,6 +33,9 @@ class JobResponse(BaseModel):
 
     # Classification
     company_type: str | None = None
+    company_tier: str | None = None
+    funding_stage: str | None = None
+    headcount_band: str | None = None
 
     # Scoring
     relevancy_score: float | None = None
@@ -84,6 +87,17 @@ class PriorityCount(BaseModel):
     count: int
 
 
+class CompanyTierCount(BaseModel):
+    tier: str
+    count: int
+
+
+class CareersLink(BaseModel):
+    name: str
+    tier: str
+    careers_url: str
+
+
 class StatsResponse(BaseModel):
     """Dashboard KPI summary."""
 
@@ -103,8 +117,14 @@ class StatsResponse(BaseModel):
     nbfc_count: int = 0
     other_count: int = 0
 
+    top_tier_count: int = 0
+    unicorn_count: int = 0
+    growth_startup_count: int = 0
+    early_startup_count: int = 0
+
     by_verdict: list[VerdictCount] = []
     by_company_type: list[CompanyTypeCount] = []
     by_priority: list[PriorityCount] = []
+    by_company_tier: list[CompanyTierCount] = []
 
     applied_count: int = 0

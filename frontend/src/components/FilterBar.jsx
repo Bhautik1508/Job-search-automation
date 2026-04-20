@@ -69,6 +69,23 @@ export default function FilterBar({ filters, onChange }) {
         </select>
       </div>
 
+      {/* Company Tier */}
+      <div className="filter-bar__group">
+        <select
+          id="filter-company-tier"
+          value={filters.company_tier || ''}
+          onChange={(e) => update('company_tier', e.target.value)}
+          className="filter-bar__select"
+        >
+          <option value="">All Tiers</option>
+          <option value="top_tier">🌟 Top Tier</option>
+          <option value="unicorn">🦄 Unicorn</option>
+          <option value="growth_startup">📈 Growth Startup</option>
+          <option value="early_startup">🌱 Early Startup</option>
+          <option value="other">🏢 Other</option>
+        </select>
+      </div>
+
       {/* Scored Only Toggle */}
       <label className="filter-bar__toggle" id="filter-scored-only">
         <input
@@ -89,6 +106,7 @@ export default function FilterBar({ filters, onChange }) {
               search: '',
               priority: '',
               company_type: '',
+              company_tier: '',
               verdict: '',
               scored_only: false,
               sort_by: 'relevancy_score',
@@ -106,5 +124,5 @@ export default function FilterBar({ filters, onChange }) {
 }
 
 function hasActiveFilters(f) {
-  return f.search || f.priority || f.company_type || f.verdict || f.scored_only
+  return f.search || f.priority || f.company_type || f.company_tier || f.verdict || f.scored_only
 }

@@ -5,6 +5,7 @@ Endpoints:
     GET   /api/jobs              — Paginated, filterable job list
     GET   /api/jobs/{id}         — Single job detail
     GET   /api/stats             — Dashboard KPI summary
+    GET   /api/companies/careers — Careers-page registry (tier-tagged)
     PATCH /api/jobs/{id}/applied — Toggle applied status
     POST  /api/scrape            — Trigger a scrape cycle
     POST  /api/score             — Trigger scoring of unscored jobs
@@ -28,12 +29,14 @@ from sqlalchemy.orm import Session
 from backend.config import API_KEY, CORS_EXTRA_ORIGINS, FRONTEND_URL, IS_PRODUCTION
 from backend.database.models import Job, get_engine, get_session_factory, init_db
 from backend.api.schemas import (
-    JobResponse,
+    CareersLink,
+    CompanyTierCount,
+    CompanyTypeCount,
     JobListResponse,
+    JobResponse,
+    PriorityCount,
     StatsResponse,
     VerdictCount,
-    CompanyTypeCount,
-    PriorityCount,
 )
 
 # ------------------------------------------------------------------
@@ -141,6 +144,7 @@ def list_jobs(
     max_score: float | None = Query(None, ge=0, le=100),
     priority: str | None = Query(None),
     company_type: str | None = Query(None),
+    company_tier: str | None = Query(None),
     verdict: str | None = Query(None),
     search: str | None = Query(None),
     sort_by: str = Query("relevancy_score"),
@@ -163,6 +167,8 @@ def list_jobs(
             query = query.filter(Job.apply_priority == priority)
         if company_type:
             query = query.filter(Job.company_type == company_type)
+        if company_tier:
+            query = query.filter(Job.company_tier == company_tier)
         if verdict:
             query = query.filter(Job.verdict == verdict)
         if search:
@@ -291,6 +297,16 @@ def get_stats():
         )
         by_verdict = [VerdictCount(verdict=v, count=c) for v, c in verdict_rows]
 
+        # Query 5: company-tier breakdown (Phase 6)
+        tier_rows = (
+            session.query(Job.company_tier, func.count(Job.id))
+            .filter(Job.company_tier.isnot(None))
+            .group_by(Job.company_tier)
+            .all()
+        )
+        tier_counts = {t: c for t, c in tier_rows}
+        by_company_tier = [CompanyTierCount(tier=t, count=c) for t, c in tier_rows]
+
         return StatsResponse(
             total_jobs=total_jobs,
             scored_jobs=scored_jobs,
@@ -305,13 +321,34 @@ def get_stats():
             bank_count=ctype_counts.get("bank", 0),
             nbfc_count=ctype_counts.get("nbfc", 0),
             other_count=ctype_counts.get("other", 0),
+            top_tier_count=tier_counts.get("top_tier", 0),
+            unicorn_count=tier_counts.get("unicorn", 0),
+            growth_startup_count=tier_counts.get("growth_startup", 0),
+            early_startup_count=tier_counts.get("early_startup", 0),
             by_verdict=by_verdict,
             by_company_type=by_company_type,
             by_priority=by_priority,
+            by_company_tier=by_company_tier,
             applied_count=applied_count,
         )
     finally:
         session.close()
+
+
+# ------------------------------------------------------------------
+# Companies (Phase 6)
+# ------------------------------------------------------------------
+
+@app.get("/api/companies/careers", response_model=list[CareersLink])
+def list_careers_links():
+    """
+    Surface direct careers-page URLs for every company in the tier registry.
+
+    Lets the dashboard show "Open careers page" links without scraping,
+    independent of whether scraped jobs from that company already exist in DB.
+    """
+    from backend.scoring.tier_classifier import careers_links
+    return [CareersLink(**entry) for entry in careers_links()]
 
 
 # ------------------------------------------------------------------

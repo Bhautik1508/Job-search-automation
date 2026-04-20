@@ -111,8 +111,16 @@ def update_job_scores(
     score_reasoning: str,
     missing_skills: str,
     company_type: str,
+    company_tier: str | None = None,
+    funding_stage: str | None = None,
+    headcount_band: str | None = None,
 ) -> Job:
-    """Update a job's scoring fields and commit."""
+    """Update a job's scoring fields and commit.
+
+    Phase 6 adds optional `company_tier` / `funding_stage` / `headcount_band`.
+    Kept optional to keep the pre-Phase-6 contract stable for tests and any
+    other callers that only compute the domain classification.
+    """
     job.relevancy_score = relevancy_score
     job.skills_match_score = skills_match_score
     job.domain_fit_score = domain_fit_score
@@ -124,6 +132,12 @@ def update_job_scores(
     job.score_reasoning = score_reasoning
     job.missing_skills = missing_skills
     job.company_type = company_type
+    if company_tier is not None:
+        job.company_tier = company_tier
+    if funding_stage is not None:
+        job.funding_stage = funding_stage
+    if headcount_band is not None:
+        job.headcount_band = headcount_band
     job.date_scored = datetime.now(timezone.utc)
     session.commit()
     return job

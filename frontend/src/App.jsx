@@ -3,6 +3,7 @@ import KpiCards from './components/KpiCards'
 import FilterBar from './components/FilterBar'
 import JobTable from './components/JobTable'
 import ScoreModal from './components/ScoreModal'
+import CareersLinks from './components/CareersLinks'
 import { apiFetch } from './api'
 import './App.css'
 
@@ -10,6 +11,7 @@ const DEFAULT_FILTERS = {
   search: '',
   priority: '',
   company_type: '',
+  company_tier: '',
   verdict: '',
   scored_only: false,
   sort_by: 'relevancy_score',
@@ -61,6 +63,7 @@ export default function App() {
       if (f.search) params.set('search', f.search)
       if (f.priority) params.set('priority', f.priority)
       if (f.company_type) params.set('company_type', f.company_type)
+      if (f.company_tier) params.set('company_tier', f.company_tier)
       if (f.verdict) params.set('verdict', f.verdict)
       if (f.scored_only) params.set('scored_only', 'true')
 
@@ -277,6 +280,11 @@ export default function App() {
       {/* KPI Cards */}
       <section className="dashboard__section">
         <KpiCards stats={stats} loading={statsLoading} />
+      </section>
+
+      {/* Careers Links (Phase 6) */}
+      <section className="dashboard__section">
+        <CareersLinks />
       </section>
 
       {/* Filters */}

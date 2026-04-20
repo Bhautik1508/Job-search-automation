@@ -59,6 +59,13 @@ export default function ScoreModal({ job, onClose }) {
                 {job.company_type}
               </span>
             )}
+            {job.company_tier && job.company_tier !== 'other' && (
+              <span className="badge" style={{ background: 'rgba(168,85,247,0.18)', color: 'var(--text-strong)' }}>
+                {job.company_tier.replace(/_/g, ' ')}
+                {job.funding_stage && job.funding_stage !== 'unknown' && ` · ${job.funding_stage}`}
+                {job.headcount_band && job.headcount_band !== 'unknown' && ` · ${job.headcount_band}`}
+              </span>
+            )}
           </div>
         </div>
 

@@ -53,6 +53,9 @@ class Job(Base):
 
     # ---- Classification ----
     company_type = Column(String(30), nullable=True)      # fintech, bank, nbfc, digital_banking_arm, other
+    company_tier = Column(String(30), nullable=True)      # top_tier, unicorn, growth_startup, early_startup, other
+    funding_stage = Column(String(30), nullable=True)     # seed, series_a..f, pre_ipo, public, bootstrapped, unknown
+    headcount_band = Column(String(30), nullable=True)    # <50, 50-200, 200-1000, 1000-5000, 5000+
 
     # ---- Scoring (Phase 2 — populated later) ----
     relevancy_score = Column(Float, nullable=True)
@@ -88,6 +91,7 @@ class Job(Base):
         Index("ix_jobs_verdict", "verdict"),
         Index("ix_jobs_date_scraped", "date_scraped"),
         Index("ix_jobs_applied_relevancy", "applied", "relevancy_score"),
+        Index("ix_jobs_company_tier", "company_tier"),
     )
 
     def __repr__(self):

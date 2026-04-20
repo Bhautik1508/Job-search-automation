@@ -434,8 +434,9 @@ class TestStats:
 
     def test_stats_uses_few_queries(self, client, seeded_db):
         """
-        Regression test: /api/stats should use ≤4 SELECT queries.
+        Regression test: /api/stats should use ≤5 SELECT queries.
         The pre-optimization version fired ~10 separate COUNTs.
+        Phase 6 added one more GROUP BY for company_tier breakdown.
         """
         select_count = 0
 
@@ -451,7 +452,80 @@ class TestStats:
             event.remove(_test_engine, "before_cursor_execute", _on_statement)
 
         assert resp.status_code == 200
-        assert select_count <= 4, f"Expected ≤4 SELECTs, got {select_count}"
+        assert select_count <= 5, f"Expected ≤5 SELECTs, got {select_count}"
+
+
+# ==================================================================
+# Tests: Phase 6 company-tier endpoints
+# ==================================================================
+
+class TestCompanyTier:
+    """Cover the Phase 6 additions: tier column in JobResponse, tier filter
+    on /api/jobs, tier breakdown in /api/stats, /api/companies/careers."""
+
+    def _seed_tier_jobs(self):
+        """Seed jobs with known company_tier values."""
+        session = _TestSession()
+        try:
+            session.query(Job).delete()
+            jobs = [
+                _make_job(company="Google", dedup_hash="t_top", company_tier="top_tier",
+                          funding_stage="public", headcount_band="5000+"),
+                _make_job(company="Razorpay", dedup_hash="t_uni1", company_tier="unicorn",
+                          funding_stage="series_f", headcount_band="1000-5000"),
+                _make_job(company="CRED", dedup_hash="t_uni2", company_tier="unicorn",
+                          funding_stage="series_f", headcount_band="1000-5000"),
+                _make_job(company="Jupiter", dedup_hash="t_growth",
+                          company_tier="growth_startup", funding_stage="series_c"),
+            ]
+            for j in jobs:
+                session.add(j)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_job_response_includes_tier_fields(self, client):
+        self._seed_tier_jobs()
+        resp = client.get("/api/jobs?company_tier=top_tier")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        job = body["jobs"][0]
+        assert job["company_tier"] == "top_tier"
+        assert job["funding_stage"] == "public"
+        assert job["headcount_band"] == "5000+"
+
+    def test_jobs_filter_by_company_tier(self, client):
+        self._seed_tier_jobs()
+        resp = client.get("/api/jobs?company_tier=unicorn")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        tiers = {j["company_tier"] for j in body["jobs"]}
+        assert tiers == {"unicorn"}
+
+    def test_stats_includes_tier_breakdown(self, client):
+        self._seed_tier_jobs()
+        resp = client.get("/api/stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["top_tier_count"] == 1
+        assert body["unicorn_count"] == 2
+        assert body["growth_startup_count"] == 1
+        assert body["early_startup_count"] == 0
+
+        tiers = {row["tier"]: row["count"] for row in body["by_company_tier"]}
+        assert tiers == {"top_tier": 1, "unicorn": 2, "growth_startup": 1}
+
+    def test_careers_endpoint_returns_registry(self, client):
+        resp = client.get("/api/companies/careers")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) > 0
+        for entry in body:
+            assert set(entry.keys()) == {"name", "tier", "careers_url"}
+            assert entry["careers_url"].startswith("http")
 
 
 # ==================================================================

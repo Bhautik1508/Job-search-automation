@@ -62,63 +62,84 @@ const cards = [
     gradient: 'var(--gradient-amber)',
     valueKey: 'applied_count',
   },
+  {
+    key: 'top_companies',
+    label: 'Top Companies',
+    icon: '🌟',
+    gradient: 'var(--gradient-rose)',
+    // Computed at render time from top_tier_count + unicorn_count.
+    valueKey: 'top_companies',
+  },
 ]
 
 export default function KpiCards({ stats, loading }) {
   if (loading) {
     return (
       <div className="kpi-grid" id="kpi-cards">
-        {[1, 2, 3, 4].map((i) => (
+        {[1, 2, 3, 4, 5].map((i) => (
           <div key={i} className="kpi-card skeleton" style={{ height: 130 }} />
         ))}
       </div>
     )
   }
 
+  const topCompaniesCount =
+    (stats?.top_tier_count ?? 0) + (stats?.unicorn_count ?? 0)
+
   return (
     <div className="kpi-grid" id="kpi-cards">
-      {cards.map((card, idx) => (
-        <div
-          key={card.key}
-          className="kpi-card glass animate-in"
-          style={{ animationDelay: `${idx * 80}ms` }}
-          id={`kpi-${card.key}`}
-        >
-          <div className="kpi-card__icon-row">
-            <span className="kpi-card__icon">{card.icon}</span>
-            <span
-              className="kpi-card__accent-dot"
-              style={{ background: card.gradient }}
-            />
-          </div>
-          <div className="kpi-card__value">
-            <AnimatedNumber
-              value={stats?.[card.valueKey] ?? 0}
-              decimals={card.decimals || 0}
-            />
-            {card.suffix && (
-              <span className="kpi-card__suffix">{card.suffix}</span>
+      {cards.map((card, idx) => {
+        const value =
+          card.key === 'top_companies'
+            ? topCompaniesCount
+            : (stats?.[card.valueKey] ?? 0)
+        return (
+          <div
+            key={card.key}
+            className="kpi-card glass animate-in"
+            style={{ animationDelay: `${idx * 80}ms` }}
+            id={`kpi-${card.key}`}
+          >
+            <div className="kpi-card__icon-row">
+              <span className="kpi-card__icon">{card.icon}</span>
+              <span
+                className="kpi-card__accent-dot"
+                style={{ background: card.gradient }}
+              />
+            </div>
+            <div className="kpi-card__value">
+              <AnimatedNumber value={value} decimals={card.decimals || 0} />
+              {card.suffix && (
+                <span className="kpi-card__suffix">{card.suffix}</span>
+              )}
+            </div>
+            <div className="kpi-card__label">{card.label}</div>
+
+            {/* Mini sub-stats for specific cards */}
+            {card.key === 'total_jobs' && stats && (
+              <div className="kpi-card__sub">
+                <span>{stats.scored_jobs} scored</span>
+                <span className="kpi-card__sub-divider">·</span>
+                <span>{stats.unscored_jobs} pending</span>
+              </div>
+            )}
+            {card.key === 'avg_score' && stats && (
+              <div className="kpi-card__sub">
+                <span>Max: {stats.max_score}</span>
+                <span className="kpi-card__sub-divider">·</span>
+                <span>Min: {stats.min_score}</span>
+              </div>
+            )}
+            {card.key === 'top_companies' && stats && (
+              <div className="kpi-card__sub">
+                <span>{stats.top_tier_count} top tier</span>
+                <span className="kpi-card__sub-divider">·</span>
+                <span>{stats.unicorn_count} unicorn</span>
+              </div>
             )}
           </div>
-          <div className="kpi-card__label">{card.label}</div>
-
-          {/* Mini sub-stats for specific cards */}
-          {card.key === 'total_jobs' && stats && (
-            <div className="kpi-card__sub">
-              <span>{stats.scored_jobs} scored</span>
-              <span className="kpi-card__sub-divider">·</span>
-              <span>{stats.unscored_jobs} pending</span>
-            </div>
-          )}
-          {card.key === 'avg_score' && stats && (
-            <div className="kpi-card__sub">
-              <span>Max: {stats.max_score}</span>
-              <span className="kpi-card__sub-divider">·</span>
-              <span>Min: {stats.min_score}</span>
-            </div>
-          )}
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
