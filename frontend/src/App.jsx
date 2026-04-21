@@ -274,6 +274,7 @@ export default function App() {
             <div className="action-toast action-toast--success">
               ✅ Scrape complete: {scrapeStatus.result.new_inserted} new jobs added
               {' · '}{scrapeStatus.result.total_raw ?? 0} raw from engines
+              {scrapeStatus.result.title_filtered_out > 0 && ` · ${scrapeStatus.result.title_filtered_out} filtered by title`}
               {scrapeStatus.result.duplicates_skipped > 0 && ` · ${scrapeStatus.result.duplicates_skipped} duplicates skipped`}
               {scrapeStatus.result.per_engine_counts && Object.keys(scrapeStatus.result.per_engine_counts).length > 0 && (
                 <div style={{ marginTop: 4, fontSize: '0.85em', opacity: 0.8 }}>

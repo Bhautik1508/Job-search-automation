@@ -105,6 +105,8 @@ class ScraperOrchestrator:
             return {
                 "status": "completed",
                 "total_raw": len(raw_jobs),
+                "after_title_filter": len(relevant_jobs),
+                "title_filtered_out": filtered_out,
                 "unique_after_dedup": len(unique_jobs),
                 "new_inserted": jobs_new,
                 "duplicates_skipped": jobs_duplicate,
