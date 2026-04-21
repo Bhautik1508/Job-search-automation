@@ -273,6 +273,7 @@ export default function App() {
           {scrapeStatus.result && !scrapeStatus.running && (
             <div className="action-toast action-toast--success">
               ✅ Scrape complete: {scrapeStatus.result.new_inserted} new jobs added
+              {' · '}{scrapeStatus.result.total_raw ?? 0} raw from engines
               {scrapeStatus.result.duplicates_skipped > 0 && ` · ${scrapeStatus.result.duplicates_skipped} duplicates skipped`}
             </div>
           )}
