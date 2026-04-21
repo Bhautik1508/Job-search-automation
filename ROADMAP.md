@@ -72,6 +72,23 @@ Rank by company quality, not just JD fit.
 3. **Resume-derived query expansion** — pull skill/keyword variants from parsed resume instead of hard-coded `SEARCH_VARIANTS`.
 4. **Dashboard filter** — company-tier chip in [FilterBar.jsx](frontend/src/components/FilterBar.jsx).
 
+### Phase 6.5 — Production Action-Runners (on-demand + scheduled)
+Today the dashboard's **Fetch New Jobs** / **Score All Jobs** buttons only work locally. On production (Vercel → Render), `require_api_key` fails closed ([main.py:87-93](backend/api/main.py#L87-L93)) because `API_KEY` isn't set on Render, so both buttons return 503. Even if auth were fixed, Render free-tier sleeps after 15 min idle and long scrape runs time out. Fix both paths — keep the buttons AND add a background scheduler — so scraping/scoring runs regardless of whether a user is on the dashboard.
+
+**(a) Wire API-key through to production so dashboard buttons work**
+1. Add `API_KEY` to [render.yaml](render.yaml) with `sync: false` (set manually in Render dashboard).
+2. Document the matching `VITE_API_KEY` setup for Vercel (already consumed by [api.js:12](frontend/src/api.js#L12)).
+3. Consider upgrading Render to Starter ($7/mo) so scrape jobs don't cold-start or time out — or shrink the scrape fan-out further for free-tier budgets.
+4. Gate Instahyre scraper behind an env flag in production (Playwright + Chrome won't fit on free-tier 512 MB).
+
+**(b) Run the scheduler as a Render background worker**
+5. Add a second service to [render.yaml](render.yaml) of `type: worker` running `python run_scheduler.py` — uses the same env + DB as the web service.
+6. Scheduler already exists ([backend/scheduler/__init__.py](backend/scheduler/__init__.py)) from Phase 5 — just needs the Render service entry.
+7. Confirm BlockingScheduler + Render worker plays well (no port binding, `keep-alive` not needed for worker type).
+8. Dashboard "last run" indicator reads `ScrapeScan` / scoring timestamps so users see the scheduler is alive.
+
+**Why both, not either-or:** buttons are for ad-hoc dev/debug loops; scheduler is the reliable production path. Phase 7 (contact enrichment) also wants background execution — building the worker service now is reused there.
+
 ### Phase 7 — Hiring Manager & Recruiter Discovery
 For each `APPLY_NOW` job, surface 1–3 contacts.
 
@@ -130,6 +147,7 @@ For each relevant job, find warm intros from the user's network.
 ## Phase Dependencies
 - Phase 5 (hardening) blocks Phases 7+ — can't add `contacts` / `outreach_drafts` tables without Alembic + Postgres.
 - Phase 6 (company tier) should precede Phase 7 — contact enrichment is prioritized by tier to conserve credits.
+- Phase 6.5 (action-runners) should precede Phase 7 — contact enrichment needs reliable background execution.
 - Phase 8 (outreach drafting) depends on Phase 7 (contacts) and portfolio library.
 - Phase 9 (referrals) is independent of Phase 7 — can run in parallel.
 - Phase 10 tracker is useful from Phase 8 onwards.
@@ -141,9 +159,10 @@ For each relevant job, find warm intros from the user's network.
 2. Phase 5 remaining optimizations (indexes, N+1 fix, /stats collapse, parallel engines, Apify pruning)
 3. Phase 5 scheduler
 4. Phase 6 company tier + sources
-5. Phase 7 contact discovery
-6. Phase 8 outreach drafting (needs portfolio library prepared)
-7. Phase 9 Happenstance referrals
-8. Phase 10 tracker + daily brief
-9. Phase 11 prep & learner
-10. Phase 12 polish
+5. Phase 6.5 production action-runners (API-key wiring + scheduler worker)
+6. Phase 7 contact discovery
+7. Phase 8 outreach drafting (needs portfolio library prepared)
+8. Phase 9 Happenstance referrals
+9. Phase 10 tracker + daily brief
+10. Phase 11 prep & learner
+11. Phase 12 polish

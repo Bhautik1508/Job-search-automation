@@ -6,6 +6,7 @@ Endpoints:
     GET   /api/jobs/{id}         — Single job detail
     GET   /api/stats             — Dashboard KPI summary
     GET   /api/companies/careers — Careers-page registry (tier-tagged)
+    GET   /api/scheduler/status  — Background scheduler liveness
     PATCH /api/jobs/{id}/applied — Toggle applied status
     POST  /api/scrape            — Trigger a scrape cycle
     POST  /api/score             — Trigger scoring of unscored jobs
@@ -19,7 +20,7 @@ import math
 import os
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from backend.config import API_KEY, CORS_EXTRA_ORIGINS, FRONTEND_URL, IS_PRODUCTION
-from backend.database.models import Job, get_engine, get_session_factory, init_db
+from backend.database.models import Job, ScrapeScan, get_engine, get_session_factory, init_db
 from backend.api.schemas import (
     CareersLink,
     CompanyTierCount,
@@ -35,6 +36,7 @@ from backend.api.schemas import (
     JobListResponse,
     JobResponse,
     PriorityCount,
+    SchedulerStatusResponse,
     StatsResponse,
     VerdictCount,
 )
@@ -349,6 +351,48 @@ def list_careers_links():
     """
     from backend.scoring.tier_classifier import careers_links
     return [CareersLink(**entry) for entry in careers_links()]
+
+
+# ------------------------------------------------------------------
+# Scheduler status (Phase 6.5)
+# ------------------------------------------------------------------
+
+@app.get("/api/scheduler/status", response_model=SchedulerStatusResponse)
+def scheduler_status():
+    """
+    Liveness indicator for the background scheduler worker.
+
+    Reads the most recent ScrapeScan + latest Job.date_scored rather than
+    poking the scheduler process — works whether the scheduler runs in-process,
+    as a separate Render worker, or not at all.
+    """
+    session = _get_session()
+    try:
+        last_scan = (
+            session.query(ScrapeScan)
+            .order_by(ScrapeScan.started_at.desc())
+            .first()
+        )
+        last_scored_at = (
+            session.query(func.max(Job.date_scored)).scalar()
+        )
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        scored_24h = (
+            session.query(func.count(Job.id))
+            .filter(Job.date_scored >= cutoff)
+            .scalar()
+        ) or 0
+
+        return SchedulerStatusResponse(
+            last_scrape_at=last_scan.started_at if last_scan else None,
+            last_scrape_status=last_scan.status if last_scan else None,
+            last_scrape_new_jobs=last_scan.jobs_new if last_scan else None,
+            last_score_at=last_scored_at,
+            scored_jobs_last_24h=int(scored_24h),
+        )
+    finally:
+        session.close()
 
 
 # ------------------------------------------------------------------

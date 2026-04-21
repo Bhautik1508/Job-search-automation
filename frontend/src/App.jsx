@@ -4,6 +4,7 @@ import FilterBar from './components/FilterBar'
 import JobTable from './components/JobTable'
 import ScoreModal from './components/ScoreModal'
 import CareersLinks from './components/CareersLinks'
+import SchedulerIndicator from './components/SchedulerIndicator'
 import { apiFetch } from './api'
 import './App.css'
 
@@ -221,6 +222,7 @@ export default function App() {
               </h1>
               <p className="dashboard__subtitle">
                 AI-powered relevancy scoring · {stats?.total_jobs ?? '—'} jobs tracked
+                <SchedulerIndicator />
               </p>
             </div>
             <div className="dashboard__actions">

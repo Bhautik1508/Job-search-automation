@@ -180,10 +180,19 @@ class ScraperOrchestrator:
         """
         Build the default set of scraper engines.
 
-        Instahyre is only included if credentials are configured,
-        to avoid login failures cluttering the logs.
+        Instahyre is only included when:
+          1. INSTAHYRE_ENABLED is true (Phase 6.5 — defaults off in production
+             because Playwright + Chromium won't fit on Render's free tier),
+             AND
+          2. credentials (INSTAHYRE_EMAIL / INSTAHYRE_PASSWORD) are set.
         """
+        from backend.config import INSTAHYRE_ENABLED
+
         engines: list[BaseScraper] = [JobSpyScraper(), ApifyScraper()]
+
+        if not INSTAHYRE_ENABLED:
+            print("[orchestrator] INSTAHYRE_ENABLED=false — skipping Instahyre.")
+            return engines
 
         instahyre = InstahyreScraper()
         if instahyre.is_configured:

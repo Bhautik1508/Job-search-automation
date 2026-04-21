@@ -11,14 +11,14 @@ all connections in the same process share a single in-memory DB.
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.database.models import Base, Job
+from backend.database.models import Base, Job, ScrapeScan
 from backend.api.main import app
 import backend.api.main as api_main
 
@@ -526,6 +526,95 @@ class TestCompanyTier:
         for entry in body:
             assert set(entry.keys()) == {"name", "tier", "careers_url"}
             assert entry["careers_url"].startswith("http")
+
+
+# ==================================================================
+# Phase 6.5 — Scheduler status endpoint
+# ==================================================================
+
+class TestSchedulerStatus:
+    """`GET /api/scheduler/status` surfaces the most recent scrape scan and
+    the latest scored job so the dashboard can show whether the background
+    worker is alive."""
+
+    def test_empty_db_returns_null_timestamps(self, client):
+        resp = client.get("/api/scheduler/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["last_scrape_at"] is None
+        assert body["last_score_at"] is None
+        assert body["scored_jobs_last_24h"] == 0
+
+    def test_last_scrape_reflects_most_recent_scan(self, client):
+        session = _TestSession()
+        try:
+            old = ScrapeScan(
+                engine="jobspy",
+                status="completed",
+                jobs_found=5,
+                jobs_new=2,
+                jobs_duplicate=3,
+                started_at=datetime.now(timezone.utc) - timedelta(hours=10),
+            )
+            new = ScrapeScan(
+                engine="apify",
+                status="completed",
+                jobs_found=8,
+                jobs_new=6,
+                jobs_duplicate=2,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+            session.add_all([old, new])
+            session.commit()
+        finally:
+            session.close()
+
+        resp = client.get("/api/scheduler/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["last_scrape_at"] is not None
+        assert body["last_scrape_status"] == "completed"
+        # "new" record has jobs_new=6 — it should win over "old".
+        assert body["last_scrape_new_jobs"] == 6
+
+    def test_scored_last_24h_excludes_older_rows(self, client):
+        now = datetime.now(timezone.utc)
+        session = _TestSession()
+        try:
+            fresh = _make_job(
+                company="FreshCo",
+                dedup_hash="fresh1",
+                relevancy_score=80.0,
+                date_scored=now - timedelta(hours=2),
+            )
+            stale = _make_job(
+                company="StaleCo",
+                dedup_hash="stale1",
+                relevancy_score=80.0,
+                date_scored=now - timedelta(hours=48),
+            )
+            unscored = _make_job(
+                company="NoScore",
+                dedup_hash="nos1",
+                relevancy_score=None,
+                date_scored=None,
+            )
+            session.add_all([fresh, stale, unscored])
+            session.commit()
+        finally:
+            session.close()
+
+        resp = client.get("/api/scheduler/status")
+        body = resp.json()
+        assert body["scored_jobs_last_24h"] == 1
+        assert body["last_score_at"] is not None
+
+    def test_endpoint_is_unauthenticated(self, client, monkeypatch):
+        """Status is read-only, should not require X-API-Key even in prod."""
+        monkeypatch.setattr(api_main, "API_KEY", "secret")
+        monkeypatch.setattr(api_main, "IS_PRODUCTION", True)
+        resp = client.get("/api/scheduler/status")
+        assert resp.status_code == 200
 
 
 # ==================================================================

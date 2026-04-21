@@ -98,6 +98,16 @@ class CareersLink(BaseModel):
     careers_url: str
 
 
+class SchedulerStatusResponse(BaseModel):
+    """Liveness indicator for the background scheduler worker."""
+
+    last_scrape_at: datetime | None = None
+    last_scrape_status: str | None = None
+    last_scrape_new_jobs: int | None = None
+    last_score_at: datetime | None = None
+    scored_jobs_last_24h: int = 0
+
+
 class StatsResponse(BaseModel):
     """Dashboard KPI summary."""
 

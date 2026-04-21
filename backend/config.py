@@ -253,6 +253,12 @@ INSTAHYRE_PASSWORD = os.getenv("INSTAHYRE_PASSWORD", "")
 INSTAHYRE_HEADLESS = os.getenv("INSTAHYRE_HEADLESS", "true").lower() == "true"
 INSTAHYRE_TIMEOUT_MS = int(os.getenv("INSTAHYRE_TIMEOUT_MS", "30000"))
 INSTAHYRE_MAX_PAGES = int(os.getenv("INSTAHYRE_MAX_PAGES", "5"))
+# Phase 6.5: Instahyre needs Playwright + Chromium — too heavy for Render's
+# free 512MB tier. Default to local-dev-on, production-off. Flip via env.
+INSTAHYRE_ENABLED = os.getenv(
+    "INSTAHYRE_ENABLED",
+    "false" if IS_PRODUCTION else "true",
+).lower() == "true"
 
 # ------------------------------------------------------------------
 # JobSpy rate-limit settings

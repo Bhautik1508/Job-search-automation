@@ -1,5 +1,15 @@
-# Render Blueprint — deploy the FastAPI backend
+# Render Blueprint — deploy the FastAPI backend + background scheduler
 # https://render.com/docs/blueprint-spec
+#
+# Two services:
+#   1. job-search-api    (type: web)    — FastAPI dashboard backend
+#   2. job-search-worker (type: worker) — APScheduler for periodic scrape+score
+#
+# The worker must share the same DATABASE_URL as the web service so scheduled
+# scrapes write into the same DB the dashboard reads from. On the free
+# SQLite-on-/tmp fallback this is NOT possible (each dyno has its own /tmp),
+# so production requires a real managed Postgres — see Phase 5 Postgres
+# migration in ROADMAP.md.
 services:
   - type: web
     name: job-search-api
@@ -16,3 +26,44 @@ services:
         value: "gemini-2.5-flash"
       - key: FRONTEND_URL
         sync: false  # Set to your Vercel URL after deploying frontend
+      # Phase 6.5: API key for mutation endpoints (/api/scrape, /api/score,
+      # /api/jobs/{id}/applied). Set to a long random string in the Render
+      # dashboard. The matching value goes into VITE_API_KEY on Vercel so the
+      # frontend can send X-API-Key with its mutation requests.
+      - key: API_KEY
+        sync: false
+      # Instahyre needs Playwright + Chromium. Too heavy for free-tier 512MB
+      # containers — kept OFF by default. Flip to "true" only after upgrading
+      # the plan AND providing INSTAHYRE_EMAIL / INSTAHYRE_PASSWORD.
+      - key: INSTAHYRE_ENABLED
+        value: "false"
+
+  - type: worker
+    name: job-search-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_scheduler.py
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      # Share the same credentials as the web service — both must hit the
+      # same DB so scheduler writes are visible to the API.
+      - key: DATABASE_URL
+        sync: false  # Set to the Postgres URL used by job-search-api
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: "gemini-2.5-flash"
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: SCRAPE_INTERVAL_HOURS
+        value: "4"
+      - key: SCORE_INTERVAL_HOURS
+        value: "4"
+      - key: SCORE_OFFSET_MINUTES
+        value: "30"
+      - key: SCHEDULER_TIMEZONE
+        value: "Asia/Kolkata"
+      - key: INSTAHYRE_ENABLED
+        value: "false"

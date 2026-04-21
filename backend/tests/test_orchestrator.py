@@ -302,3 +302,73 @@ class TestScraperOrchestrator:
         assert db_job.source_engine == "jobspy"
         assert db_job.dedup_hash is not None
         assert len(db_job.dedup_hash) == 64
+
+
+# ==================================================================
+# Phase 6.5 — Instahyre gate
+# ==================================================================
+
+class TestInstahyreGate:
+    """`_default_engines` should drop Instahyre when INSTAHYRE_ENABLED is
+    false, even if credentials happen to be set. This keeps the Playwright
+    dependency out of Render's free-tier web/worker dynos unless explicitly
+    opted in."""
+
+    def test_instahyre_skipped_when_env_disabled(self, monkeypatch, capsys):
+        import backend.config as cfg
+        monkeypatch.setattr(cfg, "INSTAHYRE_ENABLED", False)
+
+        # Even if we "accidentally" pretend credentials exist, the gate wins.
+        monkeypatch.setattr(cfg, "INSTAHYRE_EMAIL", "user@example.com")
+        monkeypatch.setattr(cfg, "INSTAHYRE_PASSWORD", "hunter2")
+
+        engines = ScraperOrchestrator._default_engines()
+
+        engine_names = {e.engine_name for e in engines}
+        assert "instahyre" not in engine_names
+        # JobSpy + Apify should still be present.
+        assert "jobspy" in engine_names
+        assert "apify" in engine_names
+
+        out = capsys.readouterr().out
+        assert "INSTAHYRE_ENABLED=false" in out
+
+    def test_instahyre_attempted_when_env_enabled(self, monkeypatch):
+        """Flag=on + configured credentials → Instahyre gets appended."""
+        import backend.config as cfg
+        monkeypatch.setattr(cfg, "INSTAHYRE_ENABLED", True)
+
+        from backend.scrapers import instahyre_scraper as insta_mod
+
+        class _FakeInstahyre:
+            engine_name = "instahyre"
+            is_configured = True
+
+        monkeypatch.setattr(insta_mod, "InstahyreScraper", _FakeInstahyre)
+        import backend.scrapers.scraper_orchestrator as orch_mod
+        monkeypatch.setattr(orch_mod, "InstahyreScraper", _FakeInstahyre)
+
+        engines = ScraperOrchestrator._default_engines()
+        engine_names = {e.engine_name for e in engines}
+        assert "instahyre" in engine_names
+
+    def test_instahyre_still_skipped_without_credentials(self, monkeypatch, capsys):
+        """Flag=on but credentials missing → gracefully skip, not crash."""
+        import backend.config as cfg
+        monkeypatch.setattr(cfg, "INSTAHYRE_ENABLED", True)
+
+        from backend.scrapers import instahyre_scraper as insta_mod
+
+        class _UnconfiguredInstahyre:
+            engine_name = "instahyre"
+            is_configured = False
+
+        monkeypatch.setattr(insta_mod, "InstahyreScraper", _UnconfiguredInstahyre)
+        import backend.scrapers.scraper_orchestrator as orch_mod
+        monkeypatch.setattr(orch_mod, "InstahyreScraper", _UnconfiguredInstahyre)
+
+        engines = ScraperOrchestrator._default_engines()
+        assert "instahyre" not in {e.engine_name for e in engines}
+
+        out = capsys.readouterr().out
+        assert "Instahyre credentials not configured" in out
