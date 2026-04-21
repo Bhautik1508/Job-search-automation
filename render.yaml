@@ -20,12 +20,22 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+      # Must match the worker's DATABASE_URL exactly — both services need to
+      # read/write the same DB. The SQLite-on-/tmp fallback is NOT viable in
+      # prod: /tmp is ephemeral per-dyno, so the web and worker would see
+      # different databases and the web's writes vanish on every restart.
+      - key: DATABASE_URL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false  # Set manually in Render dashboard
       - key: GEMINI_MODEL
         value: "gemini-2.5-flash"
       - key: FRONTEND_URL
         sync: false  # Set to your Vercel URL after deploying frontend
+      # Required for the on-demand "Fetch New Jobs" button — orchestrator runs
+      # the full engine stack (Apify + JobSpy). JobSpy-only fails on cloud IPs.
+      - key: APIFY_API_TOKEN
+        sync: false
       # Phase 6.5: API key for mutation endpoints (/api/scrape, /api/score,
       # /api/jobs/{id}/applied). Set to a long random string in the Render
       # dashboard. The matching value goes into VITE_API_KEY on Vercel so the
