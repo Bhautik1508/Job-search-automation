@@ -288,6 +288,20 @@ export default function App() {
                     .map(([name, err]) => `${name}: ${err}`).join(' · ')}
                 </div>
               )}
+              {scrapeStatus.result.rejected_title_sample && scrapeStatus.result.rejected_title_sample.length > 0 && (
+                <details style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.85 }}>
+                  <summary style={{ cursor: 'pointer' }}>
+                    Rejected titles ({scrapeStatus.result.rejected_title_sample.length} shown)
+                  </summary>
+                  <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                    {scrapeStatus.result.rejected_title_sample.map((r, i) => (
+                      <li key={i}>
+                        "{r.title || '(empty)'}" — {r.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
           {scrapeStatus.error && !scrapeStatus.running && (

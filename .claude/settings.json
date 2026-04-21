@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -m pytest backend/tests/test_scoring_pipeline.py -x -q)",
+      "Bash(python -m pytest backend/tests/test_api.py -x -q)",
+      "Bash(python -m pytest backend/tests/test_tier_classifier.py -x -q)",
+      "Bash(python -m pytest backend/tests/test_api.py::TestCompanyTier -x -q)",
+      "Bash(ls backend/scripts/)",
+      "Bash(ls scripts/)",
+      "Bash(python backfill_company_tiers.py)",
+      "Bash(python -m pytest -x -q)",
+      "Bash(python -m pytest backend/tests/test_orchestrator.py::TestInstahyreGate -x -q)",
+      "Bash(python -m pytest backend/tests/test_api.py::TestSchedulerStatus -x -q)",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest backend/tests/test_api.py::TestScrapeEndpoint backend/tests/test_orchestrator.py -x --tb=short)",
+      "Bash(python -m pytest backend/tests/test_orchestrator.py -x --tb=short)",
+      "Bash(python -m pytest backend/tests/test_api.py -x --tb=short)",
+      "Bash(python -m pytest backend/tests/test_orchestrator.py backend/tests/test_api.py -x --tb=short)",
+      "Bash(git reset *)",
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "Bash(python -c \"from apify_client import ApifyClient; print\\('OK, apify-client imports'\\)\")"
+    ]
+  }
+}

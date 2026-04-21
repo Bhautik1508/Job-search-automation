@@ -208,7 +208,9 @@ class TestScraperOrchestrator:
             RawJob(title="Product Manager", company="Razorpay",
                    source_portal="y", source_engine="mock"),
         ]
-        kept = ScraperOrchestrator._filter_relevant_titles(jobs)
+        # _filter_relevant_titles is now an instance method (tracks rejected
+        # sample on self for diagnostics). Instantiate via a minimal orchestrator.
+        kept = ScraperOrchestrator(engines=[])._filter_relevant_titles(jobs)
         assert len(kept) == 1
         assert kept[0].title == "Product Manager"
 

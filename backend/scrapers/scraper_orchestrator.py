@@ -113,6 +113,7 @@ class ScraperOrchestrator:
                 "scan_id": scan.id,
                 "per_engine_counts": dict(getattr(self, "_per_engine_counts", {})),
                 "per_engine_errors": dict(getattr(self, "_per_engine_errors", {})),
+                "rejected_title_sample": list(getattr(self, "_rejected_sample", [])),
             }
 
         except Exception as e:
@@ -218,27 +219,36 @@ class ScraperOrchestrator:
 
         return engines
 
-    @staticmethod
-    def _filter_relevant_titles(jobs: list[RawJob]) -> list[RawJob]:
+    def _filter_relevant_titles(self, jobs: list[RawJob]) -> list[RawJob]:
         """
         Filter jobs by title relevancy.
 
         A job is kept if:
           1. Its title contains at least one RELEVANT_TITLE_KEYWORDS, AND
           2. Its title does NOT contain any IRRELEVANT_TITLE_KEYWORDS.
+
+        Tracks a small sample of rejected titles on self for diagnostics —
+        lets the API surface "why did the filter eat everything?" without
+        dumping every title into the response.
         """
         filtered = []
+        rejected_sample: list[dict] = []
         for job in jobs:
             title_lower = (job.title or "").lower()
 
-            # Check blocklist first (fast rejection)
-            if any(bad in title_lower for bad in IRRELEVANT_TITLE_KEYWORDS):
+            bad_match = next((b for b in IRRELEVANT_TITLE_KEYWORDS if b in title_lower), None)
+            if bad_match:
+                if len(rejected_sample) < 10:
+                    rejected_sample.append({"title": job.title, "reason": f"blocklist:{bad_match}"})
                 continue
 
-            # Check allowlist
             if any(good in title_lower for good in RELEVANT_TITLE_KEYWORDS):
                 filtered.append(job)
+            else:
+                if len(rejected_sample) < 10:
+                    rejected_sample.append({"title": job.title, "reason": "no-allowlist-match"})
 
+        self._rejected_sample = rejected_sample
         return filtered
 
     @staticmethod
