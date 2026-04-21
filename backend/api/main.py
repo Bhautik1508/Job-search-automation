@@ -531,6 +531,21 @@ def debug_scrape_check():
     apify = ApifyScraper()
     apify_balance = apify.check_credit_balance() if apify.is_configured else None
 
+    # If credit_balance came back None with a configured token, the user wants
+    # to know *why*. Re-run the inner call without swallowing the exception.
+    apify_balance_error = None
+    if apify.is_configured and apify_balance is None:
+        try:
+            from apify_client import ApifyClient
+            _c = ApifyClient(apify.api_token)
+            _u = _c.user().get()
+            apify_balance_error = (
+                "user().get() returned empty" if not _u
+                else f"unexpected shape: keys={list(_u.keys())[:10]}"
+            )
+        except Exception as e:
+            apify_balance_error = f"{type(e).__name__}: {e}"
+
     session = _get_session()
     try:
         last_scan = session.query(ScrapeScan).order_by(ScrapeScan.started_at.desc()).first()
@@ -560,6 +575,11 @@ def debug_scrape_check():
             "max_portals": APIFY_MAX_PORTALS,
             "portal_priority": APIFY_PORTAL_PRIORITY,
             "credit_balance": apify_balance,
+            "credit_balance_error": apify_balance_error,
+        },
+        "database": {
+            "url_scheme": (str(_engine.url.drivername) if _engine else "not-initialized"),
+            "is_sqlite_tmp": str(_engine.url).startswith("sqlite:////tmp") if _engine else False,
         },
         "jobspy": {
             "note": "JobSpy scrapes LinkedIn/Indeed directly — typically blocked on cloud IPs (Render).",
