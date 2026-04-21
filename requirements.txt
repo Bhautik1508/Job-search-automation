@@ -7,6 +7,9 @@ python-dotenv==1.1.0
 # Scraping
 python-jobspy==1.1.82
 apify-client==1.9.1
+# Pin apify-shared to the last version that still exports `ignore_docs`;
+# apify-client==1.9.1 imports it, but apify-shared>=1.2.0 removed it.
+apify-shared==1.1.2
 playwright==1.52.0
 
 # Data processing
@@ -25,9 +28,9 @@ apscheduler==3.11.0
 # Migrations
 alembic==1.14.0
 
-# Postgres driver — install when DATABASE_URL points to Postgres.
-# Left as a comment so SQLite-only deployments don't pull it in.
-# psycopg2-binary==2.9.10
+# Postgres driver — required on Render because DATABASE_URL points to
+# managed Postgres (the SQLite-on-/tmp fallback is ephemeral per-dyno).
+psycopg2-binary==2.9.10
 
 # Testing
 pytest==8.3.5
