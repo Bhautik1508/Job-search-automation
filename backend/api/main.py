@@ -546,24 +546,39 @@ def debug_scrape_check():
         except Exception as e:
             apify_balance_error = f"{type(e).__name__}: {e}"
 
-    session = _get_session()
+    last_scan_info = None
+    last_scan_error = None
     try:
-        last_scan = session.query(ScrapeScan).order_by(ScrapeScan.started_at.desc()).first()
-        last_scan_info = (
-            {
-                "id": last_scan.id,
-                "started_at": last_scan.started_at.isoformat() if last_scan.started_at else None,
-                "status": last_scan.status,
-                "portals": last_scan.portals,
-                "jobs_found": last_scan.jobs_found,
-                "jobs_new": last_scan.jobs_new,
-                "jobs_duplicate": last_scan.jobs_duplicate,
-                "error_message": last_scan.error_message,
+        session = _get_session()
+        try:
+            last_scan = session.query(ScrapeScan).order_by(ScrapeScan.started_at.desc()).first()
+            if last_scan:
+                last_scan_info = {
+                    "id": last_scan.id,
+                    "started_at": last_scan.started_at.isoformat() if last_scan.started_at else None,
+                    "status": last_scan.status,
+                    "portals": last_scan.portals,
+                    "jobs_found": last_scan.jobs_found,
+                    "jobs_new": last_scan.jobs_new,
+                    "jobs_duplicate": last_scan.jobs_duplicate,
+                    "error_message": last_scan.error_message,
+                }
+        finally:
+            session.close()
+    except Exception as e:
+        last_scan_error = f"{type(e).__name__}: {e}"
+
+    db_info = {"url_scheme": "unknown", "is_sqlite_tmp": False}
+    try:
+        if _engine is not None:
+            db_info = {
+                "url_scheme": str(_engine.url.drivername),
+                "host": str(_engine.url.host) if _engine.url.host else None,
+                "database": str(_engine.url.database) if _engine.url.database else None,
+                "is_sqlite_tmp": str(_engine.url).startswith("sqlite:////tmp"),
             }
-            if last_scan else None
-        )
-    finally:
-        session.close()
+    except Exception as e:
+        db_info["inspect_error"] = f"{type(e).__name__}: {e}"
 
     return {
         "apify": {
@@ -577,10 +592,8 @@ def debug_scrape_check():
             "credit_balance": apify_balance,
             "credit_balance_error": apify_balance_error,
         },
-        "database": {
-            "url_scheme": (str(_engine.url.drivername) if _engine else "not-initialized"),
-            "is_sqlite_tmp": str(_engine.url).startswith("sqlite:////tmp") if _engine else False,
-        },
+        "database": db_info,
+        "last_scan_error": last_scan_error,
         "jobspy": {
             "note": "JobSpy scrapes LinkedIn/Indeed directly — typically blocked on cloud IPs (Render).",
             "is_configured": True,
