@@ -233,20 +233,39 @@ class ScraperOrchestrator:
         """
         filtered = []
         rejected_sample: list[dict] = []
+
+        def _record(job: RawJob, reason: str) -> None:
+            if len(rejected_sample) >= 10:
+                return
+            sample = {
+                "title": job.title,
+                "company": job.company,
+                "portal": job.source_portal,
+                "reason": reason,
+            }
+            # When the title is empty, the actor is returning records we're
+            # not mapping correctly — dump the raw item keys + a short preview
+            # so we can see which field names the actor actually uses.
+            if not job.title and isinstance(job.extra, dict):
+                sample["raw_keys"] = sorted(list(job.extra.keys()))[:25]
+                sample["raw_preview"] = {
+                    k: (str(v)[:80] if v is not None else None)
+                    for k, v in list(job.extra.items())[:8]
+                }
+            rejected_sample.append(sample)
+
         for job in jobs:
             title_lower = (job.title or "").lower()
 
             bad_match = next((b for b in IRRELEVANT_TITLE_KEYWORDS if b in title_lower), None)
             if bad_match:
-                if len(rejected_sample) < 10:
-                    rejected_sample.append({"title": job.title, "reason": f"blocklist:{bad_match}"})
+                _record(job, f"blocklist:{bad_match}")
                 continue
 
             if any(good in title_lower for good in RELEVANT_TITLE_KEYWORDS):
                 filtered.append(job)
             else:
-                if len(rejected_sample) < 10:
-                    rejected_sample.append({"title": job.title, "reason": "no-allowlist-match"})
+                _record(job, "no-allowlist-match")
 
         self._rejected_sample = rejected_sample
         return filtered

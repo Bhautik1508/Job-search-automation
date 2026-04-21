@@ -295,8 +295,18 @@ export default function App() {
                   </summary>
                   <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
                     {scrapeStatus.result.rejected_title_sample.map((r, i) => (
-                      <li key={i}>
-                        "{r.title || '(empty)'}" — {r.reason}
+                      <li key={i} style={{ marginBottom: 4 }}>
+                        "{r.title || '(empty)'}" [{r.portal}] — {r.reason}
+                        {r.raw_keys && (
+                          <div style={{ fontSize: '0.92em', opacity: 0.75, marginLeft: 8 }}>
+                            keys: {r.raw_keys.join(', ')}
+                          </div>
+                        )}
+                        {r.raw_preview && (
+                          <div style={{ fontSize: '0.92em', opacity: 0.75, marginLeft: 8 }}>
+                            preview: {JSON.stringify(r.raw_preview)}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
