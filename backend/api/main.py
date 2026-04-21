@@ -608,3 +608,48 @@ def debug_scrape_check():
         },
         "last_scan": last_scan_info,
     }
+
+
+@app.post("/api/admin/prune-out-of-region", dependencies=[Depends(require_api_key)])
+def prune_out_of_region_jobs(dry_run: bool = True):
+    """
+    Delete jobs whose location doesn't match ALLOWED_LOCATION_KEYWORDS.
+    Pass ?dry_run=false to actually delete; default is dry-run (reports count
+    but keeps rows). One-shot cleanup for regional scoping changes.
+    """
+    from backend.config import ALLOWED_LOCATION_KEYWORDS
+
+    if not ALLOWED_LOCATION_KEYWORDS:
+        return {"deleted": 0, "reason": "ALLOWED_LOCATION_KEYWORDS is empty — nothing to prune."}
+
+    session = _get_session()
+    try:
+        all_jobs = session.query(Job).all()
+        to_delete = [
+            j for j in all_jobs
+            if not any(k in (j.location or "").lower() for k in ALLOWED_LOCATION_KEYWORDS)
+        ]
+        sample = [
+            {"id": j.id, "title": j.title, "location": j.location}
+            for j in to_delete[:10]
+        ]
+
+        if not dry_run:
+            for j in to_delete:
+                session.delete(j)
+            session.commit()
+
+        return {
+            "dry_run": dry_run,
+            "total_jobs": len(all_jobs),
+            "out_of_region_count": len(to_delete),
+            "kept_count": len(all_jobs) - len(to_delete),
+            "allowed_keywords": ALLOWED_LOCATION_KEYWORDS,
+            "sample": sample,
+            "message": (
+                "Dry run — re-run with ?dry_run=false to delete."
+                if dry_run else f"Deleted {len(to_delete)} jobs."
+            ),
+        }
+    finally:
+        session.close()

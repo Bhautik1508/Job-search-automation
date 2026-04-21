@@ -18,6 +18,7 @@ from backend.database.crud import create_scrape_scan, complete_scrape_scan, bulk
 from backend.config import (
     SEARCH_VARIANTS, TARGET_CITIES, JOBSPY_RESULTS_PER_SITE, JOBSPY_HOURS_OLD,
     RELEVANT_TITLE_KEYWORDS, IRRELEVANT_TITLE_KEYWORDS,
+    ALLOWED_LOCATION_KEYWORDS,
 )
 
 
@@ -79,8 +80,19 @@ class ScraperOrchestrator:
             if filtered_out:
                 print(f"🚫 Filtered out {filtered_out} irrelevant titles (kept {len(relevant_jobs)})")
 
+            # Step 2b: Location filter — drop jobs whose location is outside
+            # the allowed set. Some actors ignore the location hint and return
+            # global results, so we enforce it post-scrape.
+            in_region_jobs = self._filter_allowed_locations(relevant_jobs)
+            location_filtered_out = len(relevant_jobs) - len(in_region_jobs)
+            if location_filtered_out:
+                print(
+                    f"🗺️  Filtered out {location_filtered_out} out-of-region jobs "
+                    f"(kept {len(in_region_jobs)}; allowed={ALLOWED_LOCATION_KEYWORDS})"
+                )
+
             # Step 3: Fuzzy-deduplicate in-memory
-            unique_jobs = deduplicate_jobs(relevant_jobs)
+            unique_jobs = deduplicate_jobs(in_region_jobs)
             print(f"🔍 After fuzzy dedup: {len(unique_jobs)} unique jobs")
 
             # Step 4: Assign dedup hashes and convert to DB models
@@ -107,6 +119,8 @@ class ScraperOrchestrator:
                 "total_raw": len(raw_jobs),
                 "after_title_filter": len(relevant_jobs),
                 "title_filtered_out": filtered_out,
+                "after_location_filter": len(in_region_jobs),
+                "location_filtered_out": location_filtered_out,
                 "unique_after_dedup": len(unique_jobs),
                 "new_inserted": jobs_new,
                 "duplicates_skipped": jobs_duplicate,
@@ -269,6 +283,23 @@ class ScraperOrchestrator:
 
         self._rejected_sample = rejected_sample
         return filtered
+
+    @staticmethod
+    def _filter_allowed_locations(jobs: list[RawJob]) -> list[RawJob]:
+        """
+        Keep only jobs whose location field contains one of ALLOWED_LOCATION_KEYWORDS.
+
+        Strict mode: jobs with empty/unknown location are dropped too, because
+        actors sometimes return out-of-region results without a location field.
+        Set ALLOWED_LOCATION_KEYWORDS="" to disable the filter entirely.
+        """
+        if not ALLOWED_LOCATION_KEYWORDS:
+            return list(jobs)
+
+        return [
+            job for job in jobs
+            if any(k in (job.location or "").lower() for k in ALLOWED_LOCATION_KEYWORDS)
+        ]
 
     @staticmethod
     def _raw_to_db_job(raw: RawJob) -> Job:

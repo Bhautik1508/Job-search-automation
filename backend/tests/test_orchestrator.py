@@ -87,7 +87,7 @@ DUPLICATE_JOBS = [
 
 class TestScraperOrchestrator:
     def test_full_pipeline(self):
-        """Full pipeline: scrape → dedup → store works end-to-end."""
+        """Full pipeline: scrape → title-filter → location-filter → dedup → store."""
         orchestrator = ScraperOrchestrator(
             engines=[MockScraper(MOCK_JOBS)],
             search_terms=["Product Manager"],
@@ -98,7 +98,10 @@ class TestScraperOrchestrator:
 
         assert result["status"] == "completed"
         assert result["total_raw"] == 4
-        assert result["new_inserted"] == 4
+        # Location filter drops the two Mumbai jobs (allowed keywords include
+        # bangalore/bengaluru/pune but not mumbai).
+        assert result["location_filtered_out"] == 2
+        assert result["new_inserted"] == 2
         assert result["scan_id"] is not None
 
     def test_dedup_across_engines(self):
@@ -142,9 +145,10 @@ class TestScraperOrchestrator:
         r1 = orchestrator.run()
         r2 = orchestrator.run()
 
-        assert r1["new_inserted"] == 4
+        # 2 of the 4 mock jobs are Mumbai-based → filtered by location filter.
+        assert r1["new_inserted"] == 2
         assert r2["new_inserted"] == 0
-        assert r2["duplicates_skipped"] == 4
+        assert r2["duplicates_skipped"] == 2
 
     def test_failing_scraper_doesnt_crash(self):
         """A failing scraper doesn't crash the whole pipeline."""
@@ -156,8 +160,8 @@ class TestScraperOrchestrator:
         )
         result = orchestrator.run()
 
-        # The mock scraper's jobs should still be stored
-        assert result["new_inserted"] == 4
+        # The mock scraper's jobs should still be stored (Mumbai ones filtered).
+        assert result["new_inserted"] == 2
 
     def test_scan_record_created(self):
         """A ScrapeScan record is created for each run."""

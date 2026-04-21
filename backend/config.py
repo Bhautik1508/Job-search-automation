@@ -57,7 +57,19 @@ DATABASE_URL = _get_database_url()
 SEARCH_TERM = os.getenv("SEARCH_TERM", "Product Manager")
 TARGET_CITIES = [
     city.strip()
-    for city in os.getenv("TARGET_CITIES", "Bangalore,Mumbai,Delhi NCR,Hyderabad,Pune").split(",")
+    for city in os.getenv("TARGET_CITIES", "Bangalore,Pune").split(",")
+]
+# Post-scrape location filter — a job's location field must contain at least
+# one of these substrings (case-insensitive) to be kept. Separate from
+# TARGET_CITIES because some actors ignore the search-location hint and
+# return global results, which we then need to drop.
+ALLOWED_LOCATION_KEYWORDS = [
+    k.strip().lower()
+    for k in os.getenv(
+        "ALLOWED_LOCATION_KEYWORDS",
+        "bangalore,bengaluru,pune",
+    ).split(",")
+    if k.strip()
 ]
 SCRAPE_INTERVAL_HOURS = int(os.getenv("SCRAPE_INTERVAL_HOURS", "4"))
 # Scoring runs on its own cadence — slightly offset from scrape so fresh jobs
