@@ -23,3 +23,8 @@ dist/
 
 # Resume
 backend/resume/*.pdf
+
+# Local tooling (Claude Code / agent scaffolding)
+.claude/
+.agents/
+skills-lock.json
