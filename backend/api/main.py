@@ -423,10 +423,12 @@ def _get_sort_column(sort_by: str):
 def _run_scrape():
     """Background thread: run scraper orchestrator."""
     from backend.scrapers.scraper_orchestrator import ScraperOrchestrator
-    from backend.scrapers.jobspy_scraper import JobSpyScraper
 
     try:
-        orchestrator = ScraperOrchestrator(engines=[JobSpyScraper()])
+        # Use default engines (Apify + JobSpy + optional Instahyre).
+        # JobSpy-only doesn't work from cloud IPs (blocked by LinkedIn/Indeed),
+        # so the on-demand button needs Apify in the mix — same as the scheduler.
+        orchestrator = ScraperOrchestrator()
         result = orchestrator.run()
         with _action_lock:
             _action_state["scrape"]["running"] = False

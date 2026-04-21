@@ -157,6 +157,14 @@ export default function App() {
   const handleScrape = async () => {
     try {
       const resp = await apiFetch('/api/scrape', { method: 'POST' })
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '')
+        const msg = resp.status === 401 || resp.status === 403
+          ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
+          : `HTTP ${resp.status}${text ? `: ${text.slice(0, 200)}` : ''}`
+        setScrapeStatus({ running: false, result: null, error: msg })
+        return
+      }
       const data = await resp.json()
       if (data.status === 'started') {
         setScrapeStatus({ running: true, result: null, error: null })
@@ -164,7 +172,7 @@ export default function App() {
         setScrapeStatus((prev) => ({ ...prev, running: true }))
       }
     } catch (err) {
-      console.error('Failed to trigger scrape:', err)
+      setScrapeStatus({ running: false, result: null, error: err.message || 'Network error' })
     }
   }
 
@@ -172,6 +180,14 @@ export default function App() {
   const handleScore = async () => {
     try {
       const resp = await apiFetch('/api/score', { method: 'POST' })
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '')
+        const msg = resp.status === 401 || resp.status === 403
+          ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
+          : `HTTP ${resp.status}${text ? `: ${text.slice(0, 200)}` : ''}`
+        setScoreStatus({ running: false, result: null, error: msg })
+        return
+      }
       const data = await resp.json()
       if (data.status === 'started') {
         setScoreStatus({ running: true, result: null, error: null })
@@ -179,7 +195,7 @@ export default function App() {
         setScoreStatus((prev) => ({ ...prev, running: true }))
       }
     } catch (err) {
-      console.error('Failed to trigger score:', err)
+      setScoreStatus({ running: false, result: null, error: err.message || 'Network error' })
     }
   }
 
