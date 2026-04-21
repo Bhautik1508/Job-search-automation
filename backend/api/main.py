@@ -513,3 +513,65 @@ def get_actions_status():
             "scrape": {**_action_state["scrape"]},
             "score": {**_action_state["score"]},
         }
+
+
+@app.get("/api/debug/scrape-check", dependencies=[Depends(require_api_key)])
+def debug_scrape_check():
+    """
+    Diagnose why scrapes return 0 jobs. Reports per-engine config status +
+    Apify credit balance + the last scan's error message. Read-only.
+    """
+    from backend.scrapers.apify_scraper import ApifyScraper
+    from backend.scrapers.jobspy_scraper import JobSpyScraper
+    from backend.config import (
+        APIFY_API_TOKEN, APIFY_ACTORS, APIFY_MAX_CITIES, APIFY_MAX_PORTALS,
+        APIFY_PORTAL_PRIORITY, SEARCH_VARIANTS, TARGET_CITIES, INSTAHYRE_ENABLED,
+    )
+
+    apify = ApifyScraper()
+    apify_balance = apify.check_credit_balance() if apify.is_configured else None
+
+    session = _get_session()
+    try:
+        last_scan = session.query(ScrapeScan).order_by(ScrapeScan.started_at.desc()).first()
+        last_scan_info = (
+            {
+                "id": last_scan.id,
+                "started_at": last_scan.started_at.isoformat() if last_scan.started_at else None,
+                "status": last_scan.status,
+                "portals": last_scan.portals,
+                "jobs_found": last_scan.jobs_found,
+                "jobs_new": last_scan.jobs_new,
+                "jobs_duplicate": last_scan.jobs_duplicate,
+                "error_message": last_scan.error_message,
+            }
+            if last_scan else None
+        )
+    finally:
+        session.close()
+
+    return {
+        "apify": {
+            "token_present": bool(APIFY_API_TOKEN),
+            "token_prefix": (APIFY_API_TOKEN[:10] + "...") if APIFY_API_TOKEN else None,
+            "is_configured": apify.is_configured,
+            "actors_configured": APIFY_ACTORS,
+            "max_cities": APIFY_MAX_CITIES,
+            "max_portals": APIFY_MAX_PORTALS,
+            "portal_priority": APIFY_PORTAL_PRIORITY,
+            "credit_balance": apify_balance,
+        },
+        "jobspy": {
+            "note": "JobSpy scrapes LinkedIn/Indeed directly — typically blocked on cloud IPs (Render).",
+            "is_configured": True,
+        },
+        "instahyre": {
+            "enabled": INSTAHYRE_ENABLED,
+            "note": "Disabled by default in production (needs Playwright/Chromium).",
+        },
+        "search_config": {
+            "search_terms": SEARCH_VARIANTS,
+            "target_cities": TARGET_CITIES,
+        },
+        "last_scan": last_scan_info,
+    }

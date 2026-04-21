@@ -109,6 +109,8 @@ class ScraperOrchestrator:
                 "new_inserted": jobs_new,
                 "duplicates_skipped": jobs_duplicate,
                 "scan_id": scan.id,
+                "per_engine_counts": dict(getattr(self, "_per_engine_counts", {})),
+                "per_engine_errors": dict(getattr(self, "_per_engine_errors", {})),
             }
 
         except Exception as e:
@@ -131,11 +133,17 @@ class ScraperOrchestrator:
 
         Engines are independent (different upstream services), so we run
         them concurrently in a thread pool when `parallel=True`.
+
+        Also populates self._per_engine_counts (engine_name → count) for
+        diagnostic reporting via the API.
         """
+        self._per_engine_counts: dict[str, int] = {}
+        self._per_engine_errors: dict[str, str] = {}
+
         if not self.engines:
             return []
 
-        def _run_one(engine: BaseScraper) -> list[RawJob]:
+        def _run_one(engine: BaseScraper) -> tuple[str, list[RawJob], str | None]:
             print(f"🔄 Running {engine.engine_name} scraper...")
             try:
                 jobs = engine.scrape_all(
@@ -145,22 +153,28 @@ class ScraperOrchestrator:
                     hours_old=JOBSPY_HOURS_OLD,
                 )
                 print(f"   ↳ {engine.engine_name} returned {len(jobs)} jobs")
-                return jobs
+                return engine.engine_name, jobs, None
             except Exception as e:
                 print(f"   ↳ {engine.engine_name} FAILED: {e}")
-                return []
+                return engine.engine_name, [], str(e)
+
+        all_jobs: list[RawJob] = []
+
+        def _collect(name: str, jobs: list[RawJob], err: str | None):
+            self._per_engine_counts[name] = len(jobs)
+            if err:
+                self._per_engine_errors[name] = err
+            all_jobs.extend(jobs)
 
         if not self.parallel or len(self.engines) == 1:
-            all_jobs: list[RawJob] = []
             for engine in self.engines:
-                all_jobs.extend(_run_one(engine))
+                _collect(*_run_one(engine))
             return all_jobs
 
-        all_jobs = []
         with ThreadPoolExecutor(max_workers=len(self.engines)) as pool:
             futures = {pool.submit(_run_one, e): e for e in self.engines}
             for fut in as_completed(futures):
-                all_jobs.extend(fut.result())
+                _collect(*fut.result())
         return all_jobs
 
     def _get_portal_names(self) -> list[str]:

@@ -275,6 +275,18 @@ export default function App() {
               ✅ Scrape complete: {scrapeStatus.result.new_inserted} new jobs added
               {' · '}{scrapeStatus.result.total_raw ?? 0} raw from engines
               {scrapeStatus.result.duplicates_skipped > 0 && ` · ${scrapeStatus.result.duplicates_skipped} duplicates skipped`}
+              {scrapeStatus.result.per_engine_counts && Object.keys(scrapeStatus.result.per_engine_counts).length > 0 && (
+                <div style={{ marginTop: 4, fontSize: '0.85em', opacity: 0.8 }}>
+                  Per engine: {Object.entries(scrapeStatus.result.per_engine_counts)
+                    .map(([name, n]) => `${name}=${n}`).join(' · ')}
+                </div>
+              )}
+              {scrapeStatus.result.per_engine_errors && Object.keys(scrapeStatus.result.per_engine_errors).length > 0 && (
+                <div style={{ marginTop: 4, fontSize: '0.85em', color: '#f43f5e' }}>
+                  Errors: {Object.entries(scrapeStatus.result.per_engine_errors)
+                    .map(([name, err]) => `${name}: ${err}`).join(' · ')}
+                </div>
+              )}
             </div>
           )}
           {scrapeStatus.error && !scrapeStatus.running && (
