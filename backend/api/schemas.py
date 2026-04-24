@@ -108,6 +108,91 @@ class SchedulerStatusResponse(BaseModel):
     scored_jobs_last_24h: int = 0
 
 
+class ContactResponse(BaseModel):
+    """A single contact linked to (or available for) a job."""
+
+    id: int
+    name: str
+    title: str | None = None
+    company: str
+    linkedin_url: str | None = None
+    email: str | None = None
+    role_type: str
+    confidence: float | None = None
+    source_provider: str
+    link_provider: str | None = None
+    link_confidence: float | None = None
+    last_enriched_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class JobContactsResponse(BaseModel):
+    """Contacts linked to a specific job."""
+
+    job_id: int
+    company: str
+    contacts: list[ContactResponse] = []
+
+
+class EnrichmentResponse(BaseModel):
+    """Result summary for POST /api/enrich-contacts."""
+
+    status: str
+    jobs_considered: int = 0
+    jobs_eligible: int = 0
+    jobs_enriched: int = 0
+    jobs_skipped: int = 0
+    contacts_created: int = 0
+    contacts_reused_from_cache: int = 0
+    links_created: int = 0
+    skip_reasons: dict[str, int] = {}
+    provider_errors: list[str] = []
+
+
+class OutreachDraftRequest(BaseModel):
+    """Payload for POST /api/outreach/draft — generate a new draft."""
+
+    job_id: int
+    contact_id: int
+    channel: str = Field(description="linkedin_note | linkedin_inmail | email | referral_ask")
+    tone: str = Field(description="founder-pitch | peer-pm | recruiter-formal")
+
+
+class OutreachDraftResponse(BaseModel):
+    """An outreach draft row."""
+
+    id: int
+    job_id: int
+    contact_id: int
+    channel: str
+    tone: str
+    subject: str | None = None
+    body: str
+    attachments: str | None = None
+    status: str
+    model: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class JobOutreachResponse(BaseModel):
+    """All outreach drafts for a job."""
+
+    job_id: int
+    drafts: list[OutreachDraftResponse] = []
+
+
+class OutreachStatusUpdate(BaseModel):
+    """Payload for PATCH /api/outreach/{id} — change status."""
+
+    status: str = Field(description="draft | sent | replied")
+
+
 class StatsResponse(BaseModel):
     """Dashboard KPI summary."""
 

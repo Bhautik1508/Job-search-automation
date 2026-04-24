@@ -277,3 +277,73 @@ INSTAHYRE_ENABLED = os.getenv(
 # ------------------------------------------------------------------
 JOBSPY_RESULTS_PER_SITE = 30  # Results to fetch per site per city
 JOBSPY_HOURS_OLD = 72         # Only fetch jobs posted in the last N hours
+
+
+# ------------------------------------------------------------------
+# Contact enrichment (Phase 7)
+# ------------------------------------------------------------------
+# Apollo.io API for HM/recruiter discovery. 50 free credits/month.
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY", "")
+APOLLO_API_BASE_URL = os.getenv("APOLLO_API_BASE_URL", "https://api.apollo.io/v1")
+
+# Enrichment-eligible tiers: only spend credits on companies worth the spend.
+CONTACT_ENRICHMENT_ELIGIBLE_TIERS = [
+    t.strip()
+    for t in os.getenv(
+        "CONTACT_ENRICHMENT_ELIGIBLE_TIERS",
+        "top_tier,unicorn,growth_startup",
+    ).split(",")
+    if t.strip()
+]
+
+# Only enrich for jobs scored at least this priority (STRONG_FIT or GOOD_FIT).
+CONTACT_ENRICHMENT_MIN_VERDICT = os.getenv("CONTACT_ENRICHMENT_MIN_VERDICT", "GOOD_FIT")
+
+# Cost guardrails — prevent runaway spend when a bug floods enrichment.
+CONTACT_ENRICHMENT_DAILY_CAP = int(os.getenv("CONTACT_ENRICHMENT_DAILY_CAP", "40"))
+CONTACT_ENRICHMENT_PER_COMPANY_CAP = int(
+    os.getenv("CONTACT_ENRICHMENT_PER_COMPANY_CAP", "3")
+)
+# 30-day cache — don't re-enrich a company more than once per month.
+CONTACT_CACHE_TTL_DAYS = int(os.getenv("CONTACT_CACHE_TTL_DAYS", "30"))
+
+# Hunter.io — email-pattern fallback provider (Phase 7.5)
+HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
+HUNTER_API_BASE_URL = os.getenv("HUNTER_API_BASE_URL", "https://api.hunter.io/v2")
+
+# Apify LinkedIn profile-scraper fallback (Phase 7.5)
+# Uses the same APIFY_API_TOKEN as the main scraper. Actor ID is configurable.
+APIFY_LINKEDIN_PROFILE_ACTOR = os.getenv(
+    "APIFY_LINKEDIN_PROFILE_ACTOR",
+    "harvestapi~linkedin-profile-scraper",
+)
+
+# Enrichment scheduler cadence (Phase 7.5). Defaults to daily, 2 hours after
+# scoring starts, so freshly-scored APPLY_NOW jobs get enriched by the next morning.
+ENRICH_INTERVAL_HOURS = int(os.getenv("ENRICH_INTERVAL_HOURS", "24"))
+ENRICH_OFFSET_MINUTES = int(os.getenv("ENRICH_OFFSET_MINUTES", "90"))
+
+# Role-type title keyword maps (used both when calling Apollo AND when
+# classifying free-form title strings from fallback providers).
+CONTACT_HM_TITLE_KEYWORDS = [
+    "head of product",
+    "vp product",
+    "vp of product",
+    "director of product",
+    "chief product officer",
+    "cpo",
+    "product lead",
+    "group product manager",
+    "gpm",
+    "senior product manager",
+]
+CONTACT_RECRUITER_TITLE_KEYWORDS = [
+    "recruiter",
+    "talent acquisition",
+    "talent partner",
+    "tech recruiter",
+    "technical recruiter",
+    "hrbp",
+    "people partner",
+    "hiring manager",  # generic fallback
+]

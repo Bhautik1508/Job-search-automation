@@ -13,7 +13,9 @@ from sqlalchemy import (
     Float,
     DateTime,
     Boolean,
+    ForeignKey,
     Index,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -118,6 +120,113 @@ class ScrapeScan(Base):
 
     def __repr__(self):
         return f"<ScrapeScan(id={self.id}, engine='{self.engine}', status='{self.status}', jobs_new={self.jobs_new})>"
+
+
+class Contact(Base):
+    """
+    A discovered hiring-manager, recruiter, or referral contact.
+
+    Deduplicated on linkedin_url when present — the enrichment pipeline
+    upserts by URL so re-running against the same company is cheap.
+    """
+
+    __tablename__ = "contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    name = Column(String(200), nullable=False)
+    title = Column(String(300), nullable=True)
+    company = Column(String(300), nullable=False)
+    linkedin_url = Column(String(500), nullable=True, unique=True)
+    email = Column(String(300), nullable=True)
+
+    role_type = Column(String(20), nullable=False)          # hm | recruiter | referral
+    confidence = Column(Float, nullable=True)
+    source_provider = Column(String(30), nullable=False)    # apollo | hunter | linkedin_apify | manual
+    raw_payload = Column(Text, nullable=True)               # raw JSON for debugging
+
+    last_enriched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("ix_contacts_company", "company"),
+        Index("ix_contacts_company_role", "company", "role_type"),
+        Index("ix_contacts_last_enriched_at", "last_enriched_at"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<Contact(id={self.id}, name='{self.name}', company='{self.company}', "
+            f"role_type='{self.role_type}')>"
+        )
+
+
+class OutreachDraft(Base):
+    """
+    A generated outreach message targeting a specific (job, contact) pair.
+
+    One row per (job_id, contact_id, channel) — regenerating replaces the
+    body/subject in-place so we don't accumulate variants.
+    """
+
+    __tablename__ = "outreach_drafts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+
+    channel = Column(String(30), nullable=False)   # linkedin_note | linkedin_inmail | email | referral_ask
+    tone = Column(String(30), nullable=False)      # founder-pitch | peer-pm | recruiter-formal
+    subject = Column(String(500), nullable=True)
+    body = Column(Text, nullable=False)
+    attachments = Column(Text, nullable=True)      # JSON list of portfolio item IDs
+
+    status = Column(String(20), nullable=False, default="draft")  # draft | sent | replied
+    model = Column(String(60), nullable=True)      # gemini model id that produced this draft
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id", "contact_id", "channel",
+            name="uq_outreach_drafts_job_contact_channel",
+        ),
+        Index("ix_outreach_drafts_job_id", "job_id"),
+        Index("ix_outreach_drafts_contact_id", "contact_id"),
+        Index("ix_outreach_drafts_status", "status"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<OutreachDraft(id={self.id}, job_id={self.job_id}, "
+            f"contact_id={self.contact_id}, channel='{self.channel}', status='{self.status}')>"
+        )
+
+
+class JobContact(Base):
+    """
+    Link between a Job and a Contact — a contact can be relevant to
+    many jobs (company-level), so we don't duplicate the contact row.
+    """
+
+    __tablename__ = "job_contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(30), nullable=False)
+    confidence = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "contact_id", name="uq_job_contacts_pair"),
+        Index("ix_job_contacts_job_id", "job_id"),
+        Index("ix_job_contacts_contact_id", "contact_id"),
+    )
+
+    def __repr__(self):
+        return f"<JobContact(job_id={self.job_id}, contact_id={self.contact_id})>"
 
 
 # ------------------------------------------------------------------

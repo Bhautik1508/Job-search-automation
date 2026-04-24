@@ -23,6 +23,8 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from backend.config import (
+    ENRICH_INTERVAL_HOURS,
+    ENRICH_OFFSET_MINUTES,
     SCHEDULER_TIMEZONE,
     SCORE_INTERVAL_HOURS,
     SCORE_OFFSET_MINUTES,
@@ -54,6 +56,35 @@ def _run_score() -> dict:
     return pipeline.run()
 
 
+def _run_enrich() -> dict:
+    """
+    Scheduled enrichment pass over eligible jobs. Imported lazily so the
+    scheduler module remains cheap to import in tests without pulling in
+    httpx/Apify.
+    """
+    from backend.contacts.enrichment_pipeline import EnrichmentPipeline
+    from backend.database.models import Job, get_engine, get_session_factory, init_db
+
+    engine = get_engine()
+    init_db(engine)
+    Session = get_session_factory(engine)
+    session = Session()
+    try:
+        pipeline = EnrichmentPipeline(session)
+        eligible = (
+            session.query(Job)
+            .filter(Job.applied == False)  # noqa: E712
+            .filter(Job.verdict.isnot(None))
+            .order_by(Job.relevancy_score.desc().nullslast())
+            .limit(50)  # hard cap per cycle — cost guardrails enforce the real budget
+            .all()
+        )
+        result = pipeline.run(eligible)
+        return result.to_dict()
+    finally:
+        session.close()
+
+
 def scrape_job() -> None:
     try:
         result = _run_scrape()
@@ -72,16 +103,27 @@ def score_job() -> None:
         traceback.print_exc()
 
 
+def enrich_job() -> None:
+    try:
+        result = _run_enrich()
+        log.info("Scheduled enrichment finished: %s", result)
+    except Exception:
+        log.exception("Scheduled enrichment failed")
+        traceback.print_exc()
+
+
 def build_scheduler(
     scheduler_cls: type[BlockingScheduler] = BlockingScheduler,
     scrape_func: Callable[[], None] = scrape_job,
     score_func: Callable[[], None] = score_job,
+    enrich_func: Callable[[], None] = enrich_job,
 ) -> BlockingScheduler:
     """
-    Build a scheduler with scrape and score jobs registered.
+    Build a scheduler with scrape, score, and enrichment jobs registered.
 
-    scheduler_cls/scrape_func/score_func are injectable so tests can pass in
-    a BackgroundScheduler or stub callables without monkeypatching.
+    scheduler_cls/scrape_func/score_func/enrich_func are injectable so
+    tests can pass in a BackgroundScheduler or stub callables without
+    monkeypatching.
     """
     sched = scheduler_cls(timezone=SCHEDULER_TIMEZONE)
     sched.add_job(
@@ -105,6 +147,18 @@ def build_scheduler(
         max_instances=1,
         coalesce=True,
     )
+    sched.add_job(
+        enrich_func,
+        IntervalTrigger(
+            hours=ENRICH_INTERVAL_HOURS,
+            minutes=ENRICH_OFFSET_MINUTES,
+        ),
+        id="enrich",
+        name="enrich-cycle",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     return sched
 
 
@@ -115,10 +169,13 @@ def main() -> None:
     )
     sched = build_scheduler()
     log.info(
-        "Scheduler starting — scrape every %sh, score every %sh+%sm, tz=%s",
+        "Scheduler starting — scrape every %sh, score every %sh+%sm, "
+        "enrich every %sh+%sm, tz=%s",
         SCRAPE_INTERVAL_HOURS,
         SCORE_INTERVAL_HOURS,
         SCORE_OFFSET_MINUTES,
+        ENRICH_INTERVAL_HOURS,
+        ENRICH_OFFSET_MINUTES,
         SCHEDULER_TIMEZONE,
     )
     sched.start()

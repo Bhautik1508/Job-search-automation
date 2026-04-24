@@ -10,6 +10,11 @@ Endpoints:
     PATCH /api/jobs/{id}/applied — Toggle applied status
     POST  /api/scrape            — Trigger a scrape cycle
     POST  /api/score             — Trigger scoring of unscored jobs
+    POST  /api/enrich-contacts   — Run contact-enrichment pipeline (Phase 7)
+    GET   /api/jobs/{id}/contacts — List contacts linked to a job (Phase 7)
+    POST  /api/outreach/draft    — Generate an outreach draft (Phase 8)
+    GET   /api/jobs/{id}/outreach — List drafts for a job (Phase 8)
+    PATCH /api/outreach/{id}     — Update draft status (Phase 8)
     GET   /api/actions/status    — Status of running background actions
     GET   /api/health            — Health check
 """
@@ -28,13 +33,29 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from backend.config import API_KEY, CORS_EXTRA_ORIGINS, FRONTEND_URL, IS_PRODUCTION
-from backend.database.models import Job, ScrapeScan, get_engine, get_session_factory, init_db
+from backend.database.models import (
+    Contact,
+    Job,
+    JobContact,
+    OutreachDraft,
+    ScrapeScan,
+    get_engine,
+    get_session_factory,
+    init_db,
+)
 from backend.api.schemas import (
     CareersLink,
     CompanyTierCount,
     CompanyTypeCount,
+    ContactResponse,
+    EnrichmentResponse,
+    JobContactsResponse,
     JobListResponse,
+    JobOutreachResponse,
     JobResponse,
+    OutreachDraftRequest,
+    OutreachDraftResponse,
+    OutreachStatusUpdate,
     PriorityCount,
     SchedulerStatusResponse,
     StatsResponse,
@@ -608,6 +629,216 @@ def debug_scrape_check():
         },
         "last_scan": last_scan_info,
     }
+
+
+# ------------------------------------------------------------------
+# Contacts (Phase 7)
+# ------------------------------------------------------------------
+
+def _contact_row_to_response(
+    contact: Contact,
+    link: JobContact | None = None,
+) -> ContactResponse:
+    """Assemble a ContactResponse from a Contact + optional JobContact."""
+    return ContactResponse(
+        id=contact.id,
+        name=contact.name,
+        title=contact.title,
+        company=contact.company,
+        linkedin_url=contact.linkedin_url,
+        email=contact.email,
+        role_type=contact.role_type,
+        confidence=contact.confidence,
+        source_provider=contact.source_provider,
+        link_provider=link.provider if link else None,
+        link_confidence=link.confidence if link else None,
+        last_enriched_at=contact.last_enriched_at,
+    )
+
+
+@app.get("/api/jobs/{job_id}/contacts", response_model=JobContactsResponse)
+def list_job_contacts(job_id: int):
+    """Return all contacts linked to a specific job."""
+    from backend.database.crud import get_contacts_for_job
+
+    session = _get_session()
+    try:
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        pairs = get_contacts_for_job(session, job_id)
+        contacts = [_contact_row_to_response(c, link) for c, link in pairs]
+        return JobContactsResponse(
+            job_id=job_id,
+            company=job.company,
+            contacts=contacts,
+        )
+    finally:
+        session.close()
+
+
+@app.post(
+    "/api/enrich-contacts",
+    response_model=EnrichmentResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def enrich_contacts(
+    job_id: int | None = Query(None, description="Enrich a single job when set"),
+    limit: int = Query(20, ge=1, le=200, description="Max eligible jobs per batch"),
+):
+    """
+    Run the contact-enrichment pipeline.
+
+    - With `?job_id=`: enrich only that job (admin/debug path).
+    - Without `job_id`: enrich up to `limit` unapplied jobs that are
+      eligible per verdict + tier config.
+    """
+    from backend.contacts.enrichment_pipeline import EnrichmentPipeline
+
+    session = _get_session()
+    try:
+        pipeline = EnrichmentPipeline(session)
+
+        if job_id is not None:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                raise HTTPException(status_code=404, detail="Job not found")
+            result = pipeline.enrich_job(job)
+        else:
+            candidates = (
+                session.query(Job)
+                .filter(Job.applied == False)  # noqa: E712 — SQLAlchemy idiom
+                .filter(Job.verdict.isnot(None))
+                .order_by(Job.relevancy_score.desc().nullslast())
+                .limit(limit)
+                .all()
+            )
+            result = pipeline.run(candidates)
+
+        return EnrichmentResponse(status="completed", **result.to_dict())
+    finally:
+        session.close()
+
+
+# ------------------------------------------------------------------
+# Outreach (Phase 8)
+# ------------------------------------------------------------------
+
+@app.post(
+    "/api/outreach/draft",
+    response_model=OutreachDraftResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def generate_outreach_draft(payload: OutreachDraftRequest):
+    """
+    Generate (or regenerate) an outreach draft for a (job, contact, channel).
+
+    Idempotent on the (job_id, contact_id, channel) tuple — rerunning replaces
+    the existing row's body/subject/tone in place rather than accumulating
+    variants.
+    """
+    from backend.database.crud import (
+        get_outreach_drafts_for_job,  # noqa: F401 — keeps import graph explicit
+        upsert_outreach_draft,
+    )
+    from backend.outreach.generator import OutreachGenerator
+
+    session = _get_session()
+    try:
+        job = session.query(Job).filter(Job.id == payload.job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        contact = session.query(Contact).filter(Contact.id == payload.contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        generator = OutreachGenerator()
+        if not generator.is_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini API key not configured — cannot generate outreach.",
+            )
+
+        try:
+            result = generator.generate(
+                job=job,
+                contact=contact,
+                channel=payload.channel,
+                tone=payload.tone,
+            )
+        except ValueError as e:
+            # Invalid channel/tone — map to 400 for a clean API contract.
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if result is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Outreach generator returned no result.",
+            )
+
+        draft = upsert_outreach_draft(
+            session,
+            job_id=job.id,
+            contact_id=contact.id,
+            channel=result.channel,
+            tone=result.tone,
+            subject=result.subject,
+            body=result.body,
+            model=result.model,
+        )
+        return OutreachDraftResponse.model_validate(draft)
+    finally:
+        session.close()
+
+
+@app.get(
+    "/api/jobs/{job_id}/outreach",
+    response_model=JobOutreachResponse,
+)
+def list_job_outreach_drafts(job_id: int):
+    """Return all outreach drafts generated for a specific job."""
+    from backend.database.crud import get_outreach_drafts_for_job
+
+    session = _get_session()
+    try:
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        drafts = get_outreach_drafts_for_job(session, job_id)
+        return JobOutreachResponse(
+            job_id=job_id,
+            drafts=[OutreachDraftResponse.model_validate(d) for d in drafts],
+        )
+    finally:
+        session.close()
+
+
+@app.patch(
+    "/api/outreach/{draft_id}",
+    response_model=OutreachDraftResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def update_outreach_draft_status(draft_id: int, payload: OutreachStatusUpdate):
+    """Move a draft through the draft → sent → replied lifecycle."""
+    from backend.database.crud import update_outreach_status
+
+    valid = {"draft", "sent", "replied"}
+    if payload.status not in valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status; expected one of {sorted(valid)}",
+        )
+
+    session = _get_session()
+    try:
+        draft = update_outreach_status(session, draft_id, payload.status)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        return OutreachDraftResponse.model_validate(draft)
+    finally:
+        session.close()
 
 
 @app.post("/api/admin/prune-out-of-region", dependencies=[Depends(require_api_key)])

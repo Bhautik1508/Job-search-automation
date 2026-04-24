@@ -88,15 +88,75 @@ class TestMigrations:
         assert not (hot & index_names), "Hot indexes should be gone after downgrade"
 
     def test_models_match_migrated_schema(self, fresh_db):
-        """Columns declared on Job/ScrapeScan exist in the migrated DB."""
-        from backend.database.models import Job, ScrapeScan
+        """Columns declared on Job/ScrapeScan/Contact/JobContact/OutreachDraft exist in the migrated DB."""
+        from backend.database.models import (
+            Contact, Job, JobContact, OutreachDraft, ScrapeScan,
+        )
 
         command.upgrade(_make_config(fresh_db), "head")
         engine = create_engine(fresh_db)
         insp = inspect(engine)
 
-        for model in (Job, ScrapeScan):
+        for model in (Job, ScrapeScan, Contact, JobContact, OutreachDraft):
             db_cols = {c["name"] for c in insp.get_columns(model.__tablename__)}
             model_cols = {c.name for c in model.__table__.columns}
             missing = model_cols - db_cols
             assert not missing, f"{model.__tablename__} missing cols: {missing}"
+
+    def test_phase_7_contact_tables_present(self, fresh_db):
+        """Phase 7 migration adds contacts + job_contacts tables with hot indexes."""
+        command.upgrade(_make_config(fresh_db), "head")
+        engine = create_engine(fresh_db)
+        insp = inspect(engine)
+
+        tables = set(insp.get_table_names())
+        assert {"contacts", "job_contacts"}.issubset(tables)
+
+        contact_indexes = {ix["name"] for ix in insp.get_indexes("contacts")}
+        assert {
+            "ix_contacts_company",
+            "ix_contacts_company_role",
+            "ix_contacts_last_enriched_at",
+        }.issubset(contact_indexes)
+
+        job_contact_indexes = {ix["name"] for ix in insp.get_indexes("job_contacts")}
+        assert {
+            "ix_job_contacts_job_id",
+            "ix_job_contacts_contact_id",
+        }.issubset(job_contact_indexes)
+
+    def test_phase_7_downgrade_drops_contact_tables(self, fresh_db):
+        cfg = _make_config(fresh_db)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0003_tier")
+
+        engine = create_engine(fresh_db)
+        tables = set(inspect(engine).get_table_names())
+        assert "contacts" not in tables
+        assert "job_contacts" not in tables
+
+    def test_phase_8_outreach_table_present(self, fresh_db):
+        """Phase 8 migration adds outreach_drafts with expected indexes + unique key."""
+        command.upgrade(_make_config(fresh_db), "head")
+        engine = create_engine(fresh_db)
+        insp = inspect(engine)
+
+        assert "outreach_drafts" in set(insp.get_table_names())
+
+        indexes = {ix["name"] for ix in insp.get_indexes("outreach_drafts")}
+        assert {
+            "ix_outreach_drafts_job_id",
+            "ix_outreach_drafts_contact_id",
+            "ix_outreach_drafts_status",
+        }.issubset(indexes)
+
+        uniques = {uq["name"] for uq in insp.get_unique_constraints("outreach_drafts")}
+        assert "uq_outreach_drafts_job_contact_channel" in uniques
+
+    def test_phase_8_downgrade_drops_outreach_table(self, fresh_db):
+        cfg = _make_config(fresh_db)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0004_contacts")
+
+        engine = create_engine(fresh_db)
+        assert "outreach_drafts" not in set(inspect(engine).get_table_names())
