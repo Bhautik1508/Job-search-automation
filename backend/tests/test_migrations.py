@@ -160,3 +160,20 @@ class TestMigrations:
 
         engine = create_engine(fresh_db)
         assert "outreach_drafts" not in set(inspect(engine).get_table_names())
+
+    def test_phase_r3_case_study_columns_present(self, fresh_db):
+        """0007 adds case_study_link / case_study_attachment to outreach_drafts."""
+        command.upgrade(_make_config(fresh_db), "head")
+        engine = create_engine(fresh_db)
+        cols = {c["name"] for c in inspect(engine).get_columns("outreach_drafts")}
+        assert "case_study_link" in cols
+        assert "case_study_attachment" in cols
+
+    def test_phase_r3_downgrade_drops_case_study_columns(self, fresh_db):
+        cfg = _make_config(fresh_db)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0006_status")
+        engine = create_engine(fresh_db)
+        cols = {c["name"] for c in inspect(engine).get_columns("outreach_drafts")}
+        assert "case_study_link" not in cols
+        assert "case_study_attachment" not in cols

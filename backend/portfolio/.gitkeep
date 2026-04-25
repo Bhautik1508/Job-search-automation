@@ -1,0 +1,5 @@
+# Drop case-study PDFs here. The filename you place here is referenced
+# from `PortfolioItem.attachment_path` in `backend/outreach/portfolio_registry.py`.
+#
+# These files are intentionally NOT committed by default — each PDF is a
+# personal artifact. Tracked via .gitkeep so the directory itself ships.

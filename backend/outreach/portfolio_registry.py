@@ -24,8 +24,10 @@ class PortfolioItem:
 
     Fields are intentionally small:
       - `title` + `summary` go into the Gemini prompt.
-      - `url` is optional — some items are internal/private and don't
-        have a shareable link.
+      - `url` is an optional public link (Notion, Medium, personal site).
+      - `attachment_path` points to a PDF in `backend/portfolio/` for
+        email channels that prefer an attached case study. Either, both,
+        or neither may be set — the generator surfaces whichever exists.
       - `domain_tags` / `skill_tags` drive ranking against a given job.
       - `metrics` is a one-line quantified impact blurb (e.g.
         "Lifted 30-day retention from 42% → 58%"). Gemini is told to
@@ -37,6 +39,7 @@ class PortfolioItem:
     summary: str
     metrics: str | None = None
     url: str | None = None
+    attachment_path: str | None = None
     domain_tags: tuple[str, ...] = field(default_factory=tuple)
     skill_tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -82,6 +85,7 @@ _DEFAULT_ITEMS: tuple[PortfolioItem, ...] = (
             "to background polling."
         ),
         metrics="Activation +22% week-over-week; support tickets −31%.",
+        attachment_path="upi-onboarding.pdf",
         domain_tags=("fintech", "payments"),
         skill_tags=("activation", "0-1"),
     ),
@@ -94,6 +98,7 @@ _DEFAULT_ITEMS: tuple[PortfolioItem, ...] = (
             "signals, approval explainability surfaced in the app."
         ),
         metrics="Approval rate +14% at unchanged default rate.",
+        attachment_path="lending-credit-engine.pdf",
         domain_tags=("fintech", "lending"),
         skill_tags=("0-1", "data", "platform"),
     ),

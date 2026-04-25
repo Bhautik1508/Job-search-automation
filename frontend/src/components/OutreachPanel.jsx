@@ -16,11 +16,6 @@ const TONES = [
 
 const STATUSES = ['draft', 'sent', 'replied']
 
-/**
- * OutreachPanel — generate + manage outreach drafts for a (job, contact).
- * Channel/tone pickers drive POST /api/outreach/draft; existing drafts
- * render with inline status controls that hit PATCH /api/outreach/:id.
- */
 export default function OutreachPanel({ jobId, contactId }) {
   const [drafts, setDrafts] = useState([])
   const [loading, setLoading] = useState(false)
@@ -81,40 +76,28 @@ export default function OutreachPanel({ jobId, contactId }) {
     }
   }
 
-  const handleStatusChange = async (draftId, newStatus) => {
+  const patchDraft = async (draftId, payload) => {
     try {
       const resp = await apiFetch(`/api/outreach/${draftId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(payload),
       })
       if (resp.ok) {
         const updated = await resp.json()
         setDrafts((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
-      } else {
-        setError(`Status update failed: HTTP ${resp.status}`)
+        return updated
       }
+      setError(`Update failed: HTTP ${resp.status}`)
     } catch (err) {
       setError(err.message || 'Network error')
     }
-  }
-
-  const copyToClipboard = async (text, draftId) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      const el = document.getElementById(`copied-${draftId}`)
-      if (el) {
-        el.textContent = '✓ Copied'
-        setTimeout(() => { el.textContent = '📋 Copy' }, 1400)
-      }
-    } catch {
-      /* ignore */
-    }
+    return null
   }
 
   return (
     <div className="modal__section" id="outreach-panel">
-      <h3 className="modal__section-title">✍️ Outreach Drafts</h3>
+      <h3 className="modal__section-title">Outreach Drafts</h3>
 
       <div className="outreach__controls">
         <label className="outreach__field">
@@ -147,11 +130,11 @@ export default function OutreachPanel({ jobId, contactId }) {
           disabled={generating || !contactId}
           id="btn-generate-outreach"
         >
-          {generating ? <><span className="spinner" /> Generating…</> : '⚡ Generate Draft'}
+          {generating ? 'Generating…' : 'Generate Draft'}
         </button>
       </div>
 
-      {error && <div className="panel__error">⚠️ {error}</div>}
+      {error && <div className="panel__error">{error}</div>}
 
       {loading && !drafts.length && (
         <div className="panel__empty">Loading drafts…</div>
@@ -166,51 +149,176 @@ export default function OutreachPanel({ jobId, contactId }) {
       {drafts.length > 0 && (
         <ul className="draft-list">
           {drafts.map((d) => (
-            <li key={d.id} className="draft-item" id={`draft-${d.id}`}>
-              <div className="draft-item__header">
-                <div className="draft-item__tags">
-                  <span className="badge badge--channel">{formatChannel(d.channel)}</span>
-                  <span className="badge badge--tone">{d.tone}</span>
-                  <span className={`badge badge--status-${d.status}`}>{d.status}</span>
-                </div>
-                <div className="draft-item__actions">
-                  <button
-                    className="panel__btn panel__btn--ghost"
-                    onClick={() => copyToClipboard(
-                      d.subject ? `${d.subject}\n\n${d.body}` : d.body,
-                      d.id,
-                    )}
-                    id={`copied-${d.id}`}
-                  >
-                    📋 Copy
-                  </button>
-                  <select
-                    className="draft-item__status-select"
-                    value={d.status}
-                    onChange={(e) => handleStatusChange(d.id, e.target.value)}
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              {d.subject && (
-                <div className="draft-item__subject">
-                  <strong>Subject:</strong> {d.subject}
-                </div>
-              )}
-              <pre className="draft-item__body">{d.body}</pre>
-              {d.model && (
-                <div className="draft-item__meta">
-                  {d.model} · updated {new Date(d.updated_at).toLocaleString()}
-                </div>
-              )}
-            </li>
+            <DraftItem
+              key={d.id}
+              draft={d}
+              onPatch={(payload) => patchDraft(d.id, payload)}
+            />
           ))}
         </ul>
       )}
     </div>
+  )
+}
+
+function DraftItem({ draft, onPatch }) {
+  const [editing, setEditing] = useState(false)
+  const [body, setBody] = useState(draft.body)
+  const [subject, setSubject] = useState(draft.subject || '')
+  const [saving, setSaving] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setBody(draft.body)
+    setSubject(draft.subject || '')
+  }, [draft.id, draft.body, draft.subject])
+
+  const dirty = body !== draft.body || subject !== (draft.subject || '')
+
+  const handleSave = async () => {
+    if (!dirty) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    const payload = {}
+    if (body !== draft.body) payload.body = body
+    if (subject !== (draft.subject || '')) payload.subject = subject
+    const updated = await onPatch(payload)
+    setSaving(false)
+    if (updated) setEditing(false)
+  }
+
+  const handleCancel = () => {
+    setBody(draft.body)
+    setSubject(draft.subject || '')
+    setEditing(false)
+  }
+
+  const handleCopy = async () => {
+    const text = subject ? `${subject}\n\n${body}` : body
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const isEmail = draft.channel === 'email'
+  const link = draft.case_study_link
+  const attachment = draft.case_study_attachment
+
+  return (
+    <li className="draft-item" id={`draft-${draft.id}`}>
+      <div className="draft-item__header">
+        <div className="draft-item__tags">
+          <span className="badge badge--channel">{formatChannel(draft.channel)}</span>
+          <span className="badge badge--tone">{draft.tone}</span>
+          <span className={`badge badge--status-${draft.status}`}>{draft.status}</span>
+        </div>
+        <div className="draft-item__actions">
+          {!editing && (
+            <button
+              className="panel__btn panel__btn--ghost"
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </button>
+          )}
+          <button
+            className="panel__btn panel__btn--ghost"
+            onClick={handleCopy}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <select
+            className="draft-item__status-select"
+            value={draft.status}
+            onChange={(e) => onPatch({ status: e.target.value })}
+          >
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {editing ? (
+        <>
+          {(draft.subject !== null || subject) && (
+            <input
+              type="text"
+              className="draft-item__subject-input"
+              placeholder="Subject"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          )}
+          <textarea
+            className="draft-item__body-textarea"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={Math.max(6, body.split('\n').length + 1)}
+          />
+          <div className="draft-item__edit-actions">
+            <button
+              className="panel__btn panel__btn--primary"
+              onClick={handleSave}
+              disabled={saving || !dirty}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              className="panel__btn panel__btn--ghost"
+              onClick={handleCancel}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {draft.subject && (
+            <div className="draft-item__subject">
+              <strong>Subject:</strong> {draft.subject}
+            </div>
+          )}
+          <pre className="draft-item__body">{draft.body}</pre>
+        </>
+      )}
+
+      {(link || attachment) && (
+        <div className="draft-item__case-study">
+          <span className="draft-item__case-study-label">
+            Case study {isEmail ? '— include below' : '— attach when sending'}:
+          </span>
+          {link && (
+            <a
+              href={link}
+              target="_blank"
+              rel="noreferrer"
+              className="draft-item__case-study-link"
+            >
+              {link}
+            </a>
+          )}
+          {attachment && (
+            <span className="draft-item__case-study-file">
+              {attachment}
+            </span>
+          )}
+        </div>
+      )}
+
+      {draft.model && (
+        <div className="draft-item__meta">
+          {draft.model} · updated {new Date(draft.updated_at).toLocaleString()}
+        </div>
+      )}
+    </li>
   )
 }
 

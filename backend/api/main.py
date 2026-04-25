@@ -826,6 +826,8 @@ def generate_outreach_draft(payload: OutreachDraftRequest):
             subject=result.subject,
             body=result.body,
             model=result.model,
+            case_study_link=result.case_study_link,
+            case_study_attachment=result.case_study_attachment,
         )
         return OutreachDraftResponse.model_validate(draft)
     finally:
@@ -861,19 +863,37 @@ def list_job_outreach_drafts(job_id: int):
     dependencies=[Depends(require_api_key)],
 )
 def update_outreach_draft_status(draft_id: int, payload: OutreachStatusUpdate):
-    """Move a draft through the draft → sent → replied lifecycle."""
-    from backend.database.crud import update_outreach_status
+    """
+    Edit a draft (R3): status, body, and/or subject. At least one must be set.
 
-    valid = {"draft", "sent", "replied"}
-    if payload.status not in valid:
+    Status moves through draft → sent → replied. Body/subject let the user
+    tweak copy before copying it out.
+    """
+    from backend.database.crud import update_outreach_draft
+
+    if payload.status is None and payload.body is None and payload.subject is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid status; expected one of {sorted(valid)}",
+            detail="At least one of status, body, subject must be provided.",
         )
+
+    if payload.status is not None:
+        valid = {"draft", "sent", "replied"}
+        if payload.status not in valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status; expected one of {sorted(valid)}",
+            )
 
     session = _get_session()
     try:
-        draft = update_outreach_status(session, draft_id, payload.status)
+        draft = update_outreach_draft(
+            session,
+            draft_id,
+            status=payload.status,
+            body=payload.body,
+            subject=payload.subject,
+        )
         if draft is None:
             raise HTTPException(status_code=404, detail="Draft not found")
         return OutreachDraftResponse.model_validate(draft)

@@ -891,6 +891,74 @@
   color: var(--text-muted);
 }
 
+.draft-item__subject-input,
+.draft-item__body-textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  line-height: 1.55;
+}
+
+.draft-item__subject-input {
+  font-weight: 600;
+}
+
+.draft-item__body-textarea {
+  resize: vertical;
+  min-height: 120px;
+  background: var(--bg-subtle);
+}
+
+.draft-item__subject-input:focus,
+.draft-item__body-textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.draft-item__edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.draft-item__case-study {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.78rem;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.draft-item__case-study-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.draft-item__case-study-link {
+  color: var(--accent);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.draft-item__case-study-file {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--text-secondary);
+}
+
 .badge--channel        { background: var(--bg-subtle); color: var(--text-secondary); border-color: var(--border-default); }
 .badge--tone           { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
 .badge--status-draft   { background: var(--bg-subtle); color: var(--text-secondary); border-color: var(--border-default); }

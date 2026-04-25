@@ -172,7 +172,14 @@ def _render_portfolio(items: Iterable[PortfolioItem]) -> str:
     lines: list[str] = []
     for item in items:
         metrics = f" — {item.metrics}" if item.metrics else ""
-        lines.append(f"- [{item.id}] {item.title}: {item.summary}{metrics}")
+        artifact = ""
+        if item.url and item.attachment_path:
+            artifact = " [shareable: link + PDF]"
+        elif item.url:
+            artifact = " [shareable: link]"
+        elif item.attachment_path:
+            artifact = " [shareable: PDF]"
+        lines.append(f"- [{item.id}] {item.title}: {item.summary}{metrics}{artifact}")
     return "\n".join(lines) if lines else "(no matching items)"
 
 
@@ -258,6 +265,10 @@ class GenerationResult:
     model: str
     channel: str
     tone: str
+    # Phase R3: case study to send alongside the draft. Pulled from the first
+    # portfolio item the body references; either/both may be None.
+    case_study_link: str | None = None
+    case_study_attachment: str | None = None
 
 
 class OutreachGenerator:
@@ -358,11 +369,38 @@ class OutreachGenerator:
             # Hard-trim rather than fail — the caller can always regenerate.
             body = body[: rules["max_chars"]].rstrip()
 
+        ids_used = list(parsed.portfolio_ids_used or [])
+        link, attachment = self._pick_case_study(ids_used, items)
+
         return GenerationResult(
             subject=(parsed.subject or None) if rules["has_subject"] else None,
             body=body,
-            portfolio_ids_used=list(parsed.portfolio_ids_used or []),
+            portfolio_ids_used=ids_used,
             model=self.model,
             channel=channel,
             tone=tone,
+            case_study_link=link,
+            case_study_attachment=attachment,
         )
+
+    @staticmethod
+    def _pick_case_study(
+        ids_used: list[str],
+        items: list[PortfolioItem],
+    ) -> tuple[str | None, str | None]:
+        """
+        Resolve a (link, attachment_path) pair for the draft.
+
+        Prefers the first item Gemini actually referenced in the body. Falls
+        back to the top-ranked item so an email channel still has something
+        to attach even when Gemini didn't tag IDs explicitly.
+        """
+        by_id = {item.id: item for item in items}
+        for item_id in ids_used:
+            item = by_id.get(item_id)
+            if item and (item.url or item.attachment_path):
+                return item.url, item.attachment_path
+        for item in items:
+            if item.url or item.attachment_path:
+                return item.url, item.attachment_path
+        return None, None

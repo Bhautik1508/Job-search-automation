@@ -189,6 +189,11 @@ class OutreachDraft(Base):
     status = Column(String(20), nullable=False, default="draft")  # draft | sent | replied
     model = Column(String(60), nullable=True)      # gemini model id that produced this draft
 
+    # Phase R3 case-study attach — derived from the portfolio item the
+    # generator referenced. Either/both may be null.
+    case_study_link = Column(String(500), nullable=True)
+    case_study_attachment = Column(String(500), nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 

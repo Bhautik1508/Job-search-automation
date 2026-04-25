@@ -168,6 +168,8 @@ class OutreachDraftResponse(BaseModel):
     attachments: str | None = None
     status: str
     model: str | None = None
+    case_study_link: str | None = None
+    case_study_attachment: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -183,9 +185,20 @@ class JobOutreachResponse(BaseModel):
 
 
 class OutreachStatusUpdate(BaseModel):
-    """Payload for PATCH /api/outreach/{id} — change status."""
+    """
+    Payload for PATCH /api/outreach/{id}.
 
-    status: str = Field(description="draft | sent | replied")
+    All fields optional — pass only what changed. Status moves the draft
+    through draft → sent → replied; body/subject let the user edit copy
+    in place before sending.
+    """
+
+    status: str | None = Field(
+        default=None,
+        description="draft | sent | replied",
+    )
+    body: str | None = Field(default=None, description="Edited message body.")
+    subject: str | None = Field(default=None, description="Edited subject line.")
 
 
 class JobStatusUpdate(BaseModel):

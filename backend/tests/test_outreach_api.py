@@ -291,3 +291,97 @@ class TestUpdateStatus:
     def test_404_for_missing_draft(self, client):
         resp = client.patch("/api/outreach/99999", json={"status": "sent"})
         assert resp.status_code == 404
+
+
+class TestEditDraft:
+    """Phase R3 — PATCH /api/outreach/{id} accepts body/subject edits."""
+
+    def test_edit_body_in_place(self, client):
+        session = _TestSession()
+        try:
+            job, contact = _seed(session)
+            d = upsert_outreach_draft(
+                session, job_id=job.id, contact_id=contact.id,
+                channel="email", tone="peer-pm",
+                subject="Original", body="original body",
+            )
+            draft_id = d.id
+        finally:
+            session.close()
+
+        resp = client.patch(
+            f"/api/outreach/{draft_id}",
+            json={"body": "edited body", "subject": "Edited"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["body"] == "edited body"
+        assert data["subject"] == "Edited"
+        # Status untouched.
+        assert data["status"] == "draft"
+
+    def test_edit_only_body_keeps_subject(self, client):
+        session = _TestSession()
+        try:
+            job, contact = _seed(session)
+            d = upsert_outreach_draft(
+                session, job_id=job.id, contact_id=contact.id,
+                channel="email", tone="peer-pm",
+                subject="Keep me", body="v1",
+            )
+            draft_id = d.id
+        finally:
+            session.close()
+
+        resp = client.patch(f"/api/outreach/{draft_id}", json={"body": "v2"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["body"] == "v2"
+        assert data["subject"] == "Keep me"
+
+    def test_400_when_no_fields_provided(self, client):
+        session = _TestSession()
+        try:
+            job, contact = _seed(session)
+            d = upsert_outreach_draft(
+                session, job_id=job.id, contact_id=contact.id,
+                channel="email", tone="peer-pm", body="v",
+            )
+            draft_id = d.id
+        finally:
+            session.close()
+        resp = client.patch(f"/api/outreach/{draft_id}", json={})
+        assert resp.status_code == 400
+
+
+class TestCaseStudyOnDraft:
+    """Phase R3 — generator surfaces case_study_link/attachment on the draft."""
+
+    def test_attachment_path_propagates_to_draft(self, client, monkeypatch):
+        session = _TestSession()
+        try:
+            job, contact = _seed(session)
+            job_id, contact_id = job.id, contact.id
+        finally:
+            session.close()
+
+        canned = GenerationResult(
+            subject="Hi from Bhautik",
+            body="Here's a quick proof point on lending.",
+            portfolio_ids_used=["lending-credit-engine"],
+            model="gemini-test",
+            channel="email",
+            tone="peer-pm",
+            case_study_link=None,
+            case_study_attachment="lending-credit-engine.pdf",
+        )
+        _install_fake_generator(monkeypatch, result=canned)
+
+        resp = client.post("/api/outreach/draft", json={
+            "job_id": job_id, "contact_id": contact_id,
+            "channel": "email", "tone": "peer-pm",
+        })
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["case_study_attachment"] == "lending-credit-engine.pdf"
+        assert data["case_study_link"] is None

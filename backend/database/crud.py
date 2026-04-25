@@ -418,6 +418,8 @@ def upsert_outreach_draft(
     attachments: str | None = None,
     model: str | None = None,
     status: str | None = None,
+    case_study_link: str | None = None,
+    case_study_attachment: str | None = None,
 ) -> OutreachDraft:
     """
     Insert-or-update an outreach draft keyed on (job_id, contact_id, channel).
@@ -445,6 +447,8 @@ def upsert_outreach_draft(
         existing.subject = subject
         existing.attachments = attachments
         existing.model = model or existing.model
+        existing.case_study_link = case_study_link
+        existing.case_study_attachment = case_study_attachment
         if status is not None:
             existing.status = status
         existing.updated_at = now
@@ -462,6 +466,8 @@ def upsert_outreach_draft(
         attachments=attachments,
         model=model,
         status=status or "draft",
+        case_study_link=case_study_link,
+        case_study_attachment=case_study_attachment,
         created_at=now,
         updated_at=now,
     )
@@ -496,6 +502,36 @@ def update_outreach_status(
     if draft is None:
         return None
     draft.status = status
+    draft.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(draft)
+    return draft
+
+
+def update_outreach_draft(
+    session: Session,
+    draft_id: int,
+    *,
+    status: str | None = None,
+    body: str | None = None,
+    subject: str | None = None,
+) -> OutreachDraft | None:
+    """
+    Phase R3: edit a draft in place (status, body, and/or subject).
+
+    Each kwarg is independent — pass only what changed. Returns None when
+    `draft_id` doesn't exist so the API can map to 404. `subject` accepts an
+    explicit empty string to clear it; pass `None` to leave it untouched.
+    """
+    draft = get_outreach_draft_by_id(session, draft_id)
+    if draft is None:
+        return None
+    if status is not None:
+        draft.status = status
+    if body is not None:
+        draft.body = body
+    if subject is not None:
+        draft.subject = subject or None
     draft.updated_at = datetime.now(timezone.utc)
     session.commit()
     session.refresh(draft)
