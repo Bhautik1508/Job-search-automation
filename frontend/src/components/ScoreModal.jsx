@@ -1,9 +1,14 @@
+import { useState } from 'react'
 import ScoreBar, { getScoreColor } from './ScoreBar'
+import ContactsPanel from './ContactsPanel'
+import OutreachPanel from './OutreachPanel'
 
 /**
  * ScoreModal — Detailed score breakdown for a selected job.
  */
 export default function ScoreModal({ job, onClose }) {
+  const [selectedContactId, setSelectedContactId] = useState(null)
+
   if (!job) return null
 
   const scoreRows = [
@@ -111,6 +116,19 @@ export default function ScoreModal({ job, onClose }) {
             </div>
           </div>
         )}
+
+        {/* Contacts (Phase 7) */}
+        <ContactsPanel
+          jobId={job.id}
+          selectedContactId={selectedContactId}
+          onSelectContact={setSelectedContactId}
+        />
+
+        {/* Outreach Drafts (Phase 8) */}
+        <OutreachPanel
+          jobId={job.id}
+          contactId={selectedContactId}
+        />
 
         {/* Job Link */}
         {job.job_url && (
