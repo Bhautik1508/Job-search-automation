@@ -152,7 +152,21 @@ _action_lock = threading.Lock()
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "service": "job-search-automation"}
+    """Liveness + scoring-readiness probe.
+
+    Includes resume + Gemini status so deployment env issues
+    (missing resume.pdf, missing GEMINI_API_KEY) are visible without
+    triggering a full scoring run.
+    """
+    from backend.config import BACKEND_DIR, GEMINI_API_KEY
+    resume_path = BACKEND_DIR / "resume" / "resume.pdf"
+    return {
+        "status": "ok",
+        "service": "job-search-automation",
+        "resume_pdf_exists": resume_path.exists(),
+        "resume_pdf_path": str(resume_path),
+        "gemini_configured": bool(GEMINI_API_KEY) and GEMINI_API_KEY != "your_gemini_api_key_here",
+    }
 
 
 # ------------------------------------------------------------------
