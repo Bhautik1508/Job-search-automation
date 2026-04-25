@@ -71,9 +71,13 @@ class Job(Base):
     score_reasoning = Column(Text, nullable=True)
     missing_skills = Column(Text, nullable=True)
 
-    # ---- Application tracking (Phase 4) ----
+    # ---- Application tracking ----
+    # Phase R2 status enum: new | saved | applied | interviewing | offer | rejected | hidden.
+    # `hidden` is soft-delete; default UI filter excludes hidden + rejected.
+    status = Column(String(20), nullable=False, default="new", server_default="new")
+    # Legacy bool — shadow column kept in sync by the API for one release; R5 drops it.
     applied = Column(Boolean, default=False)
-    application_status = Column(String(30), nullable=True)  # applied, interviewing, rejected, offer
+    application_status = Column(String(30), nullable=True)
 
     # ---- Timestamps ----
     date_posted = Column(DateTime, nullable=True)
@@ -94,6 +98,7 @@ class Job(Base):
         Index("ix_jobs_date_scraped", "date_scraped"),
         Index("ix_jobs_applied_relevancy", "applied", "relevancy_score"),
         Index("ix_jobs_company_tier", "company_tier"),
+        Index("ix_jobs_status", "status"),
     )
 
     def __repr__(self):

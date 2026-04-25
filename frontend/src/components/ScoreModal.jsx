@@ -20,10 +20,9 @@ export default function ScoreModal({ job, onClose }) {
   ]
 
   return (
-    <div className="modal-overlay" id="score-modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal glass animate-in"
-        id="score-modal"
+        className="modal animate-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -32,9 +31,7 @@ export default function ScoreModal({ job, onClose }) {
             <h2 className="modal__title">{job.title}</h2>
             <p className="modal__subtitle">{job.company} · {job.location || 'Remote'}</p>
           </div>
-          <button className="modal__close" onClick={onClose} id="score-modal-close">
-            ✕
-          </button>
+          <button className="modal__close" onClick={onClose}>✕</button>
         </div>
 
         {/* Overall Score */}
@@ -60,16 +57,7 @@ export default function ScoreModal({ job, onClose }) {
               {formatPriority(job.apply_priority)}
             </span>
             {job.company_type && (
-              <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: 'var(--text-accent)' }}>
-                {job.company_type}
-              </span>
-            )}
-            {job.company_tier && job.company_tier !== 'other' && (
-              <span className="badge" style={{ background: 'rgba(168,85,247,0.18)', color: 'var(--text-strong)' }}>
-                {job.company_tier.replace(/_/g, ' ')}
-                {job.funding_stage && job.funding_stage !== 'unknown' && ` · ${job.funding_stage}`}
-                {job.headcount_band && job.headcount_band !== 'unknown' && ` · ${job.headcount_band}`}
-              </span>
+              <span className="badge badge--skip">{job.company_type}</span>
             )}
           </div>
         </div>
@@ -98,7 +86,7 @@ export default function ScoreModal({ job, onClose }) {
         {/* Reasoning */}
         {job.score_reasoning && (
           <div className="modal__section">
-            <h3 className="modal__section-title">💡 AI Reasoning</h3>
+            <h3 className="modal__section-title">AI Reasoning</h3>
             <p className="modal__text">{job.score_reasoning}</p>
           </div>
         )}
@@ -106,7 +94,7 @@ export default function ScoreModal({ job, onClose }) {
         {/* Missing Skills */}
         {job.missing_skills && (
           <div className="modal__section">
-            <h3 className="modal__section-title">⚠️ Missing Skills</h3>
+            <h3 className="modal__section-title">Missing Skills</h3>
             <div className="modal__skills">
               {job.missing_skills.split(',').map((skill, i) => (
                 <span key={i} className="modal__skill-tag">
@@ -137,7 +125,6 @@ export default function ScoreModal({ job, onClose }) {
             target="_blank"
             rel="noopener noreferrer"
             className="modal__apply-btn"
-            id="score-modal-apply"
           >
             View Job Posting →
           </a>

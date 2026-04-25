@@ -1,10 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import KpiCards from './components/KpiCards'
 import FilterBar from './components/FilterBar'
 import JobTable from './components/JobTable'
 import ScoreModal from './components/ScoreModal'
-import CareersLinks from './components/CareersLinks'
-import SchedulerIndicator from './components/SchedulerIndicator'
 import { apiFetch } from './api'
 import './App.css'
 
@@ -12,8 +9,8 @@ const DEFAULT_FILTERS = {
   search: '',
   priority: '',
   company_type: '',
-  company_tier: '',
   verdict: '',
+  status: '',
   scored_only: false,
   sort_by: 'relevancy_score',
   sort_dir: 'desc',
@@ -22,37 +19,19 @@ const DEFAULT_FILTERS = {
 }
 
 export default function App() {
-  const [stats, setStats] = useState(null)
   const [jobs, setJobs] = useState([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
   const [loading, setLoading] = useState(true)
-  const [statsLoading, setStatsLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState(null)
   const debounceRef = useRef(null)
 
-  // Action states
   const [scrapeStatus, setScrapeStatus] = useState({ running: false, result: null, error: null })
   const [scoreStatus, setScoreStatus] = useState({ running: false, result: null, error: null })
+  const [statusLine, setStatusLine] = useState(null)
   const pollRef = useRef(null)
 
-  // Fetch stats
-  const fetchStats = useCallback(async () => {
-    setStatsLoading(true)
-    try {
-      const resp = await apiFetch('/api/stats')
-      if (resp.ok) {
-        setStats(await resp.json())
-      }
-    } catch (err) {
-      console.error('Failed to fetch stats:', err)
-    } finally {
-      setStatsLoading(false)
-    }
-  }, [])
-
-  // Fetch jobs
   const fetchJobs = useCallback(async (f) => {
     setLoading(true)
     try {
@@ -64,8 +43,8 @@ export default function App() {
       if (f.search) params.set('search', f.search)
       if (f.priority) params.set('priority', f.priority)
       if (f.company_type) params.set('company_type', f.company_type)
-      if (f.company_tier) params.set('company_tier', f.company_tier)
       if (f.verdict) params.set('verdict', f.verdict)
+      if (f.status) params.set('status', f.status)
       if (f.scored_only) params.set('scored_only', 'true')
 
       const resp = await apiFetch(`/api/jobs?${params}`)
@@ -82,65 +61,84 @@ export default function App() {
     }
   }, [])
 
-  // Toggle applied
-  const toggleApplied = useCallback(async (jobId, applied) => {
+  const updateStatus = useCallback(async (jobId, status) => {
     try {
-      const resp = await apiFetch(`/api/jobs/${jobId}/applied?applied=${applied}`, {
+      const resp = await apiFetch(`/api/jobs/${jobId}`, {
         method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
       })
-      if (resp.ok) {
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.id === jobId ? { ...j, applied } : j
-          )
+      if (!resp.ok) return
+      const data = await resp.json()
+      // hidden/rejected drop out of the default view, so just remove the row
+      // when the current filter would exclude it.
+      setJobs((prev) => {
+        if (!filters.status && (status === 'hidden' || status === 'rejected')) {
+          return prev.filter((j) => j.id !== jobId)
+        }
+        return prev.map((j) =>
+          j.id === jobId ? { ...j, status: data.status, applied: data.applied } : j,
         )
-        fetchStats()
-      }
+      })
     } catch (err) {
-      console.error('Failed to toggle applied:', err)
+      console.error('Failed to update status:', err)
     }
-  }, [fetchStats])
+  }, [filters.status])
 
-  // Poll action status
   const pollActions = useCallback(async () => {
     try {
       const resp = await apiFetch('/api/actions/status')
-      if (resp.ok) {
-        const data = await resp.json()
+      if (!resp.ok) return
+      const data = await resp.json()
 
-        const prevScrapeRunning = scrapeStatus.running
-        const prevScoreRunning = scoreStatus.running
+      const prevScrapeRunning = scrapeStatus.running
+      const prevScoreRunning = scoreStatus.running
 
-        setScrapeStatus({
-          running: data.scrape.running,
-          result: data.scrape.last_result,
-          error: data.scrape.error,
-        })
-        setScoreStatus({
-          running: data.score.running,
-          result: data.score.last_result,
-          error: data.score.error,
-        })
+      setScrapeStatus({
+        running: data.scrape.running,
+        result: data.scrape.last_result,
+        error: data.scrape.error,
+      })
+      setScoreStatus({
+        running: data.score.running,
+        result: data.score.last_result,
+        error: data.score.error,
+      })
 
-        // If an action just finished, refresh data
-        if ((prevScrapeRunning && !data.scrape.running) ||
-            (prevScoreRunning && !data.score.running)) {
-          fetchStats()
-          fetchJobs(filters)
+      if (prevScrapeRunning && !data.scrape.running) {
+        if (data.scrape.error) {
+          setStatusLine({ kind: 'error', text: `Scrape failed: ${data.scrape.error}` })
+        } else if (data.scrape.last_result) {
+          const r = data.scrape.last_result
+          setStatusLine({
+            kind: 'success',
+            text: `Scrape: ${r.new_inserted ?? 0} new · ${r.total_raw ?? 0} raw · ${r.duplicates_skipped ?? 0} duplicates`,
+          })
         }
-
-        // Stop polling if nothing is running
-        if (!data.scrape.running && !data.score.running) {
-          clearInterval(pollRef.current)
-          pollRef.current = null
+        fetchJobs(filters)
+      }
+      if (prevScoreRunning && !data.score.running) {
+        if (data.score.error) {
+          setStatusLine({ kind: 'error', text: `Score failed: ${data.score.error}` })
+        } else if (data.score.last_result) {
+          const r = data.score.last_result
+          setStatusLine({
+            kind: 'success',
+            text: `Score: ${r.scored ?? 0} scored${r.failed ? ` · ${r.failed} failed` : ''}`,
+          })
         }
+        fetchJobs(filters)
+      }
+
+      if (!data.scrape.running && !data.score.running) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
       }
     } catch {
-      // Ignore polling errors
+      /* ignore */
     }
-  }, [scrapeStatus.running, scoreStatus.running, fetchStats, fetchJobs, filters])
+  }, [scrapeStatus.running, scoreStatus.running, fetchJobs, filters])
 
-  // Start polling when an action starts
   useEffect(() => {
     if ((scrapeStatus.running || scoreStatus.running) && !pollRef.current) {
       pollRef.current = setInterval(pollActions, 3000)
@@ -153,58 +151,52 @@ export default function App() {
     }
   }, [scrapeStatus.running, scoreStatus.running, pollActions])
 
-  // Trigger scrape
   const handleScrape = async () => {
+    setStatusLine({ kind: 'info', text: 'Scraping started…' })
     try {
       const resp = await apiFetch('/api/scrape', { method: 'POST' })
       if (!resp.ok) {
         const text = await resp.text().catch(() => '')
-        const msg = resp.status === 401 || resp.status === 403
-          ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
-          : `HTTP ${resp.status}${text ? `: ${text.slice(0, 200)}` : ''}`
-        setScrapeStatus({ running: false, result: null, error: msg })
+        setStatusLine({
+          kind: 'error',
+          text: resp.status === 401 || resp.status === 403
+            ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
+            : `Scrape failed: HTTP ${resp.status}${text ? `: ${text.slice(0, 160)}` : ''}`,
+        })
         return
       }
       const data = await resp.json()
-      if (data.status === 'started') {
-        setScrapeStatus({ running: true, result: null, error: null })
-      } else if (data.status === 'already_running') {
+      if (data.status === 'started' || data.status === 'already_running') {
         setScrapeStatus((prev) => ({ ...prev, running: true }))
       }
     } catch (err) {
-      setScrapeStatus({ running: false, result: null, error: err.message || 'Network error' })
+      setStatusLine({ kind: 'error', text: err.message || 'Network error' })
     }
   }
 
-  // Trigger score
   const handleScore = async () => {
+    setStatusLine({ kind: 'info', text: 'Scoring started…' })
     try {
       const resp = await apiFetch('/api/score', { method: 'POST' })
       if (!resp.ok) {
         const text = await resp.text().catch(() => '')
-        const msg = resp.status === 401 || resp.status === 403
-          ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
-          : `HTTP ${resp.status}${text ? `: ${text.slice(0, 200)}` : ''}`
-        setScoreStatus({ running: false, result: null, error: msg })
+        setStatusLine({
+          kind: 'error',
+          text: resp.status === 401 || resp.status === 403
+            ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
+            : `Score failed: HTTP ${resp.status}${text ? `: ${text.slice(0, 160)}` : ''}`,
+        })
         return
       }
       const data = await resp.json()
-      if (data.status === 'started') {
-        setScoreStatus({ running: true, result: null, error: null })
-      } else if (data.status === 'already_running') {
+      if (data.status === 'started' || data.status === 'already_running') {
         setScoreStatus((prev) => ({ ...prev, running: true }))
       }
     } catch (err) {
-      setScoreStatus({ running: false, result: null, error: err.message || 'Network error' })
+      setStatusLine({ kind: 'error', text: err.message || 'Network error' })
     }
   }
 
-  // Initial load
-  useEffect(() => {
-    fetchStats()
-  }, [fetchStats])
-
-  // Debounced filter fetch
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
@@ -213,7 +205,6 @@ export default function App() {
     return () => clearTimeout(debounceRef.current)
   }, [filters, fetchJobs])
 
-  // Handle row click — fetch full job details
   const handleRowClick = useCallback(async (job) => {
     try {
       const resp = await apiFetch(`/api/jobs/${job.id}`)
@@ -225,130 +216,44 @@ export default function App() {
     }
   }, [])
 
-  return (
-    <div className="dashboard" id="dashboard">
-      {/* Header */}
-      <header className="dashboard__header animate-in" id="dashboard-header">
-        <div className="dashboard__header-content">
-          <div className="dashboard__header-top">
-            <div>
-              <h1 className="dashboard__title">
-                <span className="dashboard__title-icon">🎯</span>
-                Job Search Dashboard
-              </h1>
-              <p className="dashboard__subtitle">
-                AI-powered relevancy scoring · {stats?.total_jobs ?? '—'} jobs tracked
-                <SchedulerIndicator />
-              </p>
-            </div>
-            <div className="dashboard__actions">
-              <button
-                id="btn-scrape"
-                className={`dashboard__action-btn dashboard__action-btn--scrape ${scrapeStatus.running ? 'dashboard__action-btn--loading' : ''}`}
-                onClick={handleScrape}
-                disabled={scrapeStatus.running}
-              >
-                {scrapeStatus.running ? (
-                  <><span className="spinner" /> Scraping...</>
-                ) : (
-                  <>🔄 Fetch New Jobs</>
-                )}
-              </button>
-              <button
-                id="btn-score"
-                className={`dashboard__action-btn dashboard__action-btn--score ${scoreStatus.running ? 'dashboard__action-btn--loading' : ''}`}
-                onClick={handleScore}
-                disabled={scoreStatus.running}
-              >
-                {scoreStatus.running ? (
-                  <><span className="spinner" /> Scoring...</>
-                ) : (
-                  <>⚡ Score All Jobs</>
-                )}
-              </button>
-            </div>
-          </div>
+  const isRunning = scrapeStatus.running || scoreStatus.running
 
-          {/* Action status toasts */}
-          {scrapeStatus.result && !scrapeStatus.running && (
-            <div className="action-toast action-toast--success">
-              ✅ Scrape complete: {scrapeStatus.result.new_inserted} new jobs added
-              {' · '}{scrapeStatus.result.total_raw ?? 0} raw from engines
-              {scrapeStatus.result.title_filtered_out > 0 && ` · ${scrapeStatus.result.title_filtered_out} filtered by title`}
-              {scrapeStatus.result.duplicates_skipped > 0 && ` · ${scrapeStatus.result.duplicates_skipped} duplicates skipped`}
-              {scrapeStatus.result.per_engine_counts && Object.keys(scrapeStatus.result.per_engine_counts).length > 0 && (
-                <div style={{ marginTop: 4, fontSize: '0.85em', opacity: 0.8 }}>
-                  Per engine: {Object.entries(scrapeStatus.result.per_engine_counts)
-                    .map(([name, n]) => `${name}=${n}`).join(' · ')}
-                </div>
-              )}
-              {scrapeStatus.result.per_engine_errors && Object.keys(scrapeStatus.result.per_engine_errors).length > 0 && (
-                <div style={{ marginTop: 4, fontSize: '0.85em', color: '#f43f5e' }}>
-                  Errors: {Object.entries(scrapeStatus.result.per_engine_errors)
-                    .map(([name, err]) => `${name}: ${err}`).join(' · ')}
-                </div>
-              )}
-              {scrapeStatus.result.rejected_title_sample && scrapeStatus.result.rejected_title_sample.length > 0 && (
-                <details style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.85 }}>
-                  <summary style={{ cursor: 'pointer' }}>
-                    Rejected titles ({scrapeStatus.result.rejected_title_sample.length} shown)
-                  </summary>
-                  <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-                    {scrapeStatus.result.rejected_title_sample.map((r, i) => (
-                      <li key={i} style={{ marginBottom: 4 }}>
-                        "{r.title || '(empty)'}" [{r.portal}] — {r.reason}
-                        {r.raw_keys && (
-                          <div style={{ fontSize: '0.92em', opacity: 0.75, marginLeft: 8 }}>
-                            keys: {r.raw_keys.join(', ')}
-                          </div>
-                        )}
-                        {r.raw_preview && (
-                          <div style={{ fontSize: '0.92em', opacity: 0.75, marginLeft: 8 }}>
-                            preview: {JSON.stringify(r.raw_preview)}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-          {scrapeStatus.error && !scrapeStatus.running && (
-            <div className="action-toast action-toast--error">
-              ❌ Scrape error: {scrapeStatus.error}
-            </div>
-          )}
-          {scoreStatus.result && !scoreStatus.running && (
-            <div className="action-toast action-toast--success">
-              ✅ Scoring complete: {scoreStatus.result.scored} jobs scored
-              {scoreStatus.result.failed > 0 && ` · ${scoreStatus.result.failed} failed`}
-            </div>
-          )}
-          {scoreStatus.error && !scoreStatus.running && (
-            <div className="action-toast action-toast--error">
-              ❌ Score error: {scoreStatus.error}
-            </div>
-          )}
+  return (
+    <div className="dashboard">
+      <header className="dashboard__header">
+        <div className="dashboard__header-row">
+          <div>
+            <h1 className="dashboard__title">Job Search</h1>
+            <p className="dashboard__subtitle">{total} jobs tracked</p>
+          </div>
+          <div className="dashboard__actions">
+            <button
+              className="btn btn--primary"
+              onClick={handleScrape}
+              disabled={scrapeStatus.running}
+            >
+              {scrapeStatus.running ? 'Scraping…' : 'Scrape'}
+            </button>
+            <button
+              className="btn btn--primary"
+              onClick={handleScore}
+              disabled={scoreStatus.running}
+            >
+              {scoreStatus.running ? 'Scoring…' : 'Score'}
+            </button>
+          </div>
         </div>
+        {(statusLine || isRunning) && (
+          <div className={`status-line status-line--${statusLine?.kind ?? 'info'}`}>
+            {isRunning && !statusLine ? 'Working…' : statusLine?.text}
+          </div>
+        )}
       </header>
 
-      {/* KPI Cards */}
-      <section className="dashboard__section">
-        <KpiCards stats={stats} loading={statsLoading} />
-      </section>
-
-      {/* Careers Links (Phase 6) */}
-      <section className="dashboard__section">
-        <CareersLinks />
-      </section>
-
-      {/* Filters */}
       <section className="dashboard__section">
         <FilterBar filters={filters} onChange={setFilters} />
       </section>
 
-      {/* Job Table */}
       <section className="dashboard__section">
         <JobTable
           jobs={jobs}
@@ -359,16 +264,12 @@ export default function App() {
           filters={filters}
           onFiltersChange={setFilters}
           onRowClick={handleRowClick}
-          onToggleApplied={toggleApplied}
+          onUpdateStatus={updateStatus}
         />
       </section>
 
-      {/* Score Modal */}
       {selectedJob && (
-        <ScoreModal
-          job={selectedJob}
-          onClose={() => setSelectedJob(null)}
-        />
+        <ScoreModal job={selectedJob} onClose={() => setSelectedJob(null)} />
       )}
     </div>
   )

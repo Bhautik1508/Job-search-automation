@@ -5,9 +5,9 @@ Endpoints:
     GET   /api/jobs              — Paginated, filterable job list
     GET   /api/jobs/{id}         — Single job detail
     GET   /api/stats             — Dashboard KPI summary
-    GET   /api/companies/careers — Careers-page registry (tier-tagged)
     GET   /api/scheduler/status  — Background scheduler liveness
-    PATCH /api/jobs/{id}/applied — Toggle applied status
+    PATCH /api/jobs/{id}         — Update R2 status (new..hidden)
+    PATCH /api/jobs/{id}/applied — Legacy applied toggle (maps to status)
     POST  /api/scrape            — Trigger a scrape cycle
     POST  /api/score             — Trigger scoring of unscored jobs
     POST  /api/enrich-contacts   — Run contact-enrichment pipeline (Phase 7)
@@ -44,7 +44,6 @@ from backend.database.models import (
     init_db,
 )
 from backend.api.schemas import (
-    CareersLink,
     CompanyTierCount,
     CompanyTypeCount,
     ContactResponse,
@@ -53,6 +52,7 @@ from backend.api.schemas import (
     JobListResponse,
     JobOutreachResponse,
     JobResponse,
+    JobStatusUpdate,
     OutreachDraftRequest,
     OutreachDraftResponse,
     OutreachStatusUpdate,
@@ -183,6 +183,14 @@ def list_jobs(
     company_type: str | None = Query(None),
     company_tier: str | None = Query(None),
     verdict: str | None = Query(None),
+    status: str | None = Query(
+        None,
+        description=(
+            "Status filter (R2). Single value (e.g. 'applied') shows just that. "
+            "Pass 'all' to include hidden + rejected. Omit to use the default view "
+            "(everything except hidden + rejected)."
+        ),
+    ),
     search: str | None = Query(None),
     sort_by: str = Query("relevancy_score"),
     sort_dir: str = Query("desc"),
@@ -208,6 +216,16 @@ def list_jobs(
             query = query.filter(Job.company_tier == company_tier)
         if verdict:
             query = query.filter(Job.verdict == verdict)
+
+        # R2 status filter:
+        #   None    → exclude hidden + rejected (the calm default view)
+        #   "all"   → no filter
+        #   value   → exact match
+        if status is None:
+            query = query.filter(~Job.status.in_(["hidden", "rejected"]))
+        elif status != "all":
+            query = query.filter(Job.status == status)
+
         if search:
             search_term = f"%{search}%"
             query = query.filter(
@@ -253,18 +271,42 @@ def get_job(job_id: int):
         session.close()
 
 
-@app.patch("/api/jobs/{job_id}/applied", dependencies=[Depends(require_api_key)])
-def toggle_applied(job_id: int, applied: bool = Query(True)):
-    """Mark or unmark a job as applied."""
+@app.patch("/api/jobs/{job_id}", dependencies=[Depends(require_api_key)])
+def update_job(job_id: int, payload: JobStatusUpdate):
+    """Update a job's R2 status (new | saved | applied | … | hidden)."""
+    from backend.database.crud import JOB_STATUSES, update_job_status
+
+    if payload.status not in JOB_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid status; expected one of {list(JOB_STATUSES)}",
+        )
     session = _get_session()
     try:
-        job = session.query(Job).filter(Job.id == job_id).first()
-        if not job:
+        job = update_job_status(session, job_id, payload.status)
+        if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        job.applied = applied
-        job.application_status = "applied" if applied else None
-        session.commit()
-        return {"id": job_id, "applied": applied}
+        return {"id": job.id, "status": job.status, "applied": job.applied}
+    finally:
+        session.close()
+
+
+@app.patch("/api/jobs/{job_id}/applied", dependencies=[Depends(require_api_key)])
+def toggle_applied(job_id: int, applied: bool = Query(True)):
+    """Legacy R1 endpoint — maps to the R2 status enum.
+
+    `applied=true` → status='applied'; `applied=false` → status='new'.
+    Kept for one release so older frontends keep working; R5 removes it.
+    """
+    from backend.database.crud import update_job_status
+
+    target = "applied" if applied else "new"
+    session = _get_session()
+    try:
+        job = update_job_status(session, job_id, target)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {"id": job.id, "applied": job.applied, "status": job.status}
     finally:
         session.close()
 
@@ -370,22 +412,6 @@ def get_stats():
         )
     finally:
         session.close()
-
-
-# ------------------------------------------------------------------
-# Companies (Phase 6)
-# ------------------------------------------------------------------
-
-@app.get("/api/companies/careers", response_model=list[CareersLink])
-def list_careers_links():
-    """
-    Surface direct careers-page URLs for every company in the tier registry.
-
-    Lets the dashboard show "Open careers page" links without scraping,
-    independent of whether scraped jobs from that company already exist in DB.
-    """
-    from backend.scoring.tier_classifier import careers_links
-    return [CareersLink(**entry) for entry in careers_links()]
 
 
 # ------------------------------------------------------------------

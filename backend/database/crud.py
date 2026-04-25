@@ -83,6 +83,41 @@ def count_jobs(session: Session) -> int:
     return session.query(Job).count()
 
 
+# Phase R2 status enum. `hidden` is soft-delete; default UI filter excludes
+# hidden + rejected. Kept as a tuple (rather than Enum) because SQLAlchemy
+# stores it as a string anyway, and we need cheap "in JOB_STATUSES" checks.
+JOB_STATUSES = (
+    "new",
+    "saved",
+    "applied",
+    "interviewing",
+    "offer",
+    "rejected",
+    "hidden",
+)
+
+
+def update_job_status(session: Session, job_id: int, status: str) -> Job | None:
+    """
+    Set a job's status to one of JOB_STATUSES and keep the legacy `applied`
+    bool in sync (anything past 'applied' in the funnel implies applied=True).
+
+    Returns the updated Job, or None if the id doesn't exist.
+    """
+    if status not in JOB_STATUSES:
+        raise ValueError(f"invalid status {status!r}; expected one of {JOB_STATUSES}")
+    job = session.query(Job).filter(Job.id == job_id).first()
+    if job is None:
+        return None
+    job.status = status
+    # Shadow-sync the legacy bool: applied/interviewing/offer all imply
+    # the user has applied. New/saved/rejected/hidden → not-applied.
+    job.applied = status in {"applied", "interviewing", "offer"}
+    session.commit()
+    session.refresh(job)
+    return job
+
+
 # ------------------------------------------------------------------
 # Scoring CRUD (Phase 2)
 # ------------------------------------------------------------------

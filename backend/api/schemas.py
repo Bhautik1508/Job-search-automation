@@ -49,7 +49,8 @@ class JobResponse(BaseModel):
     score_reasoning: str | None = None
     missing_skills: str | None = None
 
-    # Application
+    # Application (R2)
+    status: str = "new"
     applied: bool = False
     application_status: str | None = None
 
@@ -90,12 +91,6 @@ class PriorityCount(BaseModel):
 class CompanyTierCount(BaseModel):
     tier: str
     count: int
-
-
-class CareersLink(BaseModel):
-    name: str
-    tier: str
-    careers_url: str
 
 
 class SchedulerStatusResponse(BaseModel):
@@ -191,6 +186,14 @@ class OutreachStatusUpdate(BaseModel):
     """Payload for PATCH /api/outreach/{id} — change status."""
 
     status: str = Field(description="draft | sent | replied")
+
+
+class JobStatusUpdate(BaseModel):
+    """Payload for PATCH /api/jobs/{id} — change application status."""
+
+    status: str = Field(
+        description="new | saved | applied | interviewing | offer | rejected | hidden",
+    )
 
 
 class StatsResponse(BaseModel):

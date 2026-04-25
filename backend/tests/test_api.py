@@ -352,6 +352,68 @@ class TestToggleApplied:
 
 
 # ==================================================================
+# Tests: R2 status enum
+# ==================================================================
+
+class TestJobStatus:
+    def test_default_status_is_new(self, client, seeded_db):
+        job_id = seeded_db[0].id
+        body = client.get(f"/api/jobs/{job_id}").json()
+        assert body["status"] == "new"
+        assert body["applied"] is False
+
+    def test_patch_status_round_trip(self, client, seeded_db):
+        job_id = seeded_db[0].id
+        resp = client.patch(f"/api/jobs/{job_id}", json={"status": "interviewing"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "interviewing"
+        # interviewing implies applied=True via the shadow-sync
+        assert body["applied"] is True
+
+    def test_patch_status_rejects_unknown(self, client, seeded_db):
+        job_id = seeded_db[0].id
+        resp = client.patch(f"/api/jobs/{job_id}", json={"status": "ghosted"})
+        assert resp.status_code == 400
+
+    def test_patch_status_404(self, client):
+        resp = client.patch("/api/jobs/9999", json={"status": "saved"})
+        assert resp.status_code == 404
+
+    def test_default_list_excludes_hidden_and_rejected(self, client, seeded_db):
+        # Hide one, reject another.
+        client.patch(f"/api/jobs/{seeded_db[0].id}", json={"status": "hidden"})
+        client.patch(f"/api/jobs/{seeded_db[1].id}", json={"status": "rejected"})
+
+        body = client.get("/api/jobs").json()
+        ids = {j["id"] for j in body["jobs"]}
+        assert seeded_db[0].id not in ids
+        assert seeded_db[1].id not in ids
+
+    def test_status_filter_value_returns_only_that_state(self, client, seeded_db):
+        client.patch(f"/api/jobs/{seeded_db[0].id}", json={"status": "applied"})
+        client.patch(f"/api/jobs/{seeded_db[1].id}", json={"status": "applied"})
+
+        body = client.get("/api/jobs?status=applied").json()
+        ids = {j["id"] for j in body["jobs"]}
+        assert ids == {seeded_db[0].id, seeded_db[1].id}
+
+    def test_status_filter_all_includes_hidden(self, client, seeded_db):
+        client.patch(f"/api/jobs/{seeded_db[0].id}", json={"status": "hidden"})
+        body = client.get("/api/jobs?status=all").json()
+        ids = {j["id"] for j in body["jobs"]}
+        assert seeded_db[0].id in ids
+
+    def test_legacy_applied_endpoint_still_writes_status(self, client, seeded_db):
+        """The R1 /applied shim should write the new status enum."""
+        job_id = seeded_db[0].id
+        client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        body = client.get(f"/api/jobs/{job_id}").json()
+        assert body["status"] == "applied"
+        assert body["applied"] is True
+
+
+# ==================================================================
 # Tests: Stats
 # ==================================================================
 
@@ -516,17 +578,6 @@ class TestCompanyTier:
 
         tiers = {row["tier"]: row["count"] for row in body["by_company_tier"]}
         assert tiers == {"top_tier": 1, "unicorn": 2, "growth_startup": 1}
-
-    def test_careers_endpoint_returns_registry(self, client):
-        resp = client.get("/api/companies/careers")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert isinstance(body, list)
-        assert len(body) > 0
-        for entry in body:
-            assert set(entry.keys()) == {"name", "tier", "careers_url"}
-            assert entry["careers_url"].startswith("http")
-
 
 # ==================================================================
 # Phase 6.5 — Scheduler status endpoint
