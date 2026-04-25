@@ -115,12 +115,17 @@ class EnrichmentPipeline:
     # Public entry points
     # ------------------------------------------------------------------
 
-    def run(self, jobs: Iterable[Job]) -> EnrichmentResult:
-        """Enrich the given iterable of jobs."""
+    def run(self, jobs: Iterable[Job], *, skip_eligibility: bool = False) -> EnrichmentResult:
+        """Enrich the given iterable of jobs.
+
+        When ``skip_eligibility`` is True, the verdict/tier/applied gates are
+        bypassed — used by the per-job admin path where the caller has
+        already decided this job is worth the credits.
+        """
         result = EnrichmentResult()
         for job in jobs:
             result.jobs_considered += 1
-            reason = self._ineligible_reason(job)
+            reason = None if skip_eligibility else self._ineligible_reason(job)
             if reason:
                 result.jobs_skipped += 1
                 result.skip_reasons[reason] = result.skip_reasons.get(reason, 0) + 1
@@ -130,9 +135,14 @@ class EnrichmentPipeline:
             self._enrich_one(job, result)
         return result
 
-    def enrich_job(self, job: Job) -> EnrichmentResult:
-        """Enrich a single job — convenience wrapper used by the API."""
-        return self.run([job])
+    def enrich_job(self, job: Job, *, skip_eligibility: bool = True) -> EnrichmentResult:
+        """Enrich a single job — convenience wrapper used by the API.
+
+        Defaults to ``skip_eligibility=True`` because callers reach this path
+        by manually clicking a specific job; the eligibility gates are batch
+        controls and shouldn't fight a deliberate user action.
+        """
+        return self.run([job], skip_eligibility=skip_eligibility)
 
     # ------------------------------------------------------------------
     # Internals

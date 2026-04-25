@@ -349,3 +349,20 @@ class TestEnrichJobHelper:
         result = pipe.enrich_job(job)
         assert result.jobs_considered == 1
         assert result.jobs_enriched == 1
+
+    def test_enrich_job_bypasses_eligibility_by_default(self, db_session):
+        """Manual per-job calls should ignore tier/verdict gates."""
+        job = _job(db_session, verdict=None, company_tier="other")
+        fake = _FakeApollo(contacts=[_apollo_contact()])
+        pipe = EnrichmentPipeline(db_session, client=fake)
+
+        result = pipe.enrich_job(job)
+        assert result.jobs_enriched == 1
+        assert result.skip_reasons == {}
+
+    def test_enrich_job_with_eligibility_still_skips(self, db_session):
+        job = _job(db_session, verdict=None, company_tier="other")
+        pipe = EnrichmentPipeline(db_session, client=_FakeApollo())
+        result = pipe.enrich_job(job, skip_eligibility=False)
+        assert result.jobs_skipped == 1
+        assert "unscored" in result.skip_reasons
