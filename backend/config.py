@@ -325,6 +325,10 @@ ENRICH_OFFSET_MINUTES = int(os.getenv("ENRICH_OFFSET_MINUTES", "90"))
 
 # Role-type title keyword maps (used both when calling Apollo AND when
 # classifying free-form title strings from fallback providers).
+#
+# CONTACT_HM_TITLE_KEYWORDS is the *default* (PM-flavoured) HM list, used
+# when we can't infer a role-specific one from the job title. The
+# per-role lists below override it when the job title matches.
 CONTACT_HM_TITLE_KEYWORDS = [
     "head of product",
     "vp product",
@@ -337,6 +341,63 @@ CONTACT_HM_TITLE_KEYWORDS = [
     "gpm",
     "senior product manager",
 ]
+
+# Job-role → HM title keywords. Order matters: the first category whose
+# patterns match the job title wins. Patterns are lowercase substrings.
+CONTACT_HM_KEYWORDS_BY_ROLE: dict[str, dict[str, list[str]]] = {
+    "product": {
+        "patterns": ["product manager", "pm,", " pm ", "product owner", "product lead"],
+        "titles": CONTACT_HM_TITLE_KEYWORDS,
+    },
+    "engineering": {
+        "patterns": [
+            "engineer", "developer", "sde", "swe", "backend", "frontend",
+            "full stack", "fullstack", "devops", "platform", "infrastructure",
+            "android", "ios", "mobile", "tech lead",
+        ],
+        "titles": [
+            "engineering manager", "vp engineering", "vp of engineering",
+            "director of engineering", "head of engineering",
+            "chief technology officer", "cto", "staff engineer",
+            "principal engineer", "tech lead",
+        ],
+    },
+    "data": {
+        "patterns": [
+            "data scientist", "data engineer", "data analyst",
+            "machine learning", "ml engineer", "analytics", "ai engineer",
+        ],
+        "titles": [
+            "head of data", "vp data", "director of data", "data lead",
+            "head of analytics", "head of ai", "head of machine learning",
+            "chief data officer", "cdo",
+        ],
+    },
+    "design": {
+        "patterns": ["designer", "ux", "ui designer", "product design"],
+        "titles": [
+            "head of design", "vp design", "director of design",
+            "design lead", "design director",
+        ],
+    },
+    "marketing": {
+        "patterns": ["marketing", "growth", "brand", "content"],
+        "titles": [
+            "head of marketing", "vp marketing", "vp of marketing",
+            "director of marketing", "chief marketing officer", "cmo",
+            "head of growth", "growth lead",
+        ],
+    },
+    "sales": {
+        "patterns": ["sales", "business development", "account executive", "bdr", "sdr"],
+        "titles": [
+            "head of sales", "vp sales", "vp of sales",
+            "director of sales", "chief revenue officer", "cro",
+            "sales director", "regional sales",
+        ],
+    },
+}
+
 CONTACT_RECRUITER_TITLE_KEYWORDS = [
     "recruiter",
     "talent acquisition",
@@ -347,3 +408,18 @@ CONTACT_RECRUITER_TITLE_KEYWORDS = [
     "people partner",
     "hiring manager",  # generic fallback
 ]
+
+
+def hm_titles_for_job(job_title: str | None) -> list[str]:
+    """Return HM title keywords appropriate for the given job title.
+
+    Falls back to the default (PM) list if no category matches — the previous
+    behaviour, so callers without job context still work.
+    """
+    if not job_title:
+        return list(CONTACT_HM_TITLE_KEYWORDS)
+    t = job_title.lower()
+    for cfg in CONTACT_HM_KEYWORDS_BY_ROLE.values():
+        if any(p in t for p in cfg["patterns"]):
+            return list(cfg["titles"])
+    return list(CONTACT_HM_TITLE_KEYWORDS)

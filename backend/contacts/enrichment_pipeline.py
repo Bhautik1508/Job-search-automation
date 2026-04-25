@@ -249,7 +249,16 @@ class EnrichmentPipeline:
             any_configured = True
 
             try:
-                fetched = provider.search_people_at_company(job.company)
+                # Pass job_title so providers that support role-aware search
+                # (Apollo) can filter HM keywords to the job's discipline
+                # instead of always searching for product titles. Providers
+                # that don't accept the kwarg ignore it.
+                try:
+                    fetched = provider.search_people_at_company(
+                        job.company, job_title=job.title,
+                    )
+                except TypeError:
+                    fetched = provider.search_people_at_company(job.company)
             except Exception as e:  # noqa: BLE001 — log & fall through
                 result.provider_errors.append(
                     f"{job.company} via {name}: {type(e).__name__}: {e}"

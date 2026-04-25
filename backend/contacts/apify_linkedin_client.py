@@ -19,6 +19,7 @@ from backend.config import (
     APIFY_LINKEDIN_PROFILE_ACTOR,
     CONTACT_HM_TITLE_KEYWORDS,
     CONTACT_RECRUITER_TITLE_KEYWORDS,
+    hm_titles_for_job,
 )
 from backend.contacts.apollo_client import ApolloContact, _classify_role, _classify_confidence
 
@@ -55,10 +56,15 @@ class ApifyLinkedInClient:
         company: str,
         *,
         per_role_limit: int = 5,
+        job_title: str | None = None,
     ) -> list[ApolloContact]:
         """
         Run one actor call per role_type (HM + recruiter), combining the
         top keyword from each bucket into the search query.
+
+        When ``job_title`` is set, the HM keyword is the first entry of
+        the job's role-specific list (e.g. "engineering manager" for an
+        SDE role) instead of the default "head of product".
 
         Falls through to [] on any failure — the pipeline treats "no
         fallback contacts" as a skippable outcome, not a fatal error.
@@ -70,9 +76,13 @@ class ApifyLinkedInClient:
         if client is None:
             return []
 
+        hm_titles = hm_titles_for_job(job_title)
+        hm_keyword = hm_titles[0] if hm_titles else (
+            CONTACT_HM_TITLE_KEYWORDS[0] if CONTACT_HM_TITLE_KEYWORDS else "head of product"
+        )
         contacts: list[ApolloContact] = []
         for role_type, keyword in (
-            ("hm", CONTACT_HM_TITLE_KEYWORDS[0] if CONTACT_HM_TITLE_KEYWORDS else "head of product"),
+            ("hm", hm_keyword),
             ("recruiter", CONTACT_RECRUITER_TITLE_KEYWORDS[0] if CONTACT_RECRUITER_TITLE_KEYWORDS else "recruiter"),
         ):
             items = self._run_actor(client, company=company, keyword=keyword, limit=per_role_limit)

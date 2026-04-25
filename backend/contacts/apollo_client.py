@@ -21,6 +21,7 @@ from backend.config import (
     APOLLO_API_KEY,
     CONTACT_HM_TITLE_KEYWORDS,
     CONTACT_RECRUITER_TITLE_KEYWORDS,
+    hm_titles_for_job,
 )
 
 
@@ -76,6 +77,7 @@ class ApolloClient:
         company: str,
         *,
         per_page: int = 5,
+        job_title: str | None = None,
     ) -> list[ApolloContact]:
         """
         Return up to `per_page` HM + `per_page` recruiter contacts at
@@ -83,15 +85,21 @@ class ApolloClient:
         `person_titles` filter is OR-combined and we'd otherwise lose
         the role_type distinction.
 
+        When ``job_title`` is provided, the HM keyword list is derived
+        from the job's role (Engineering Manager for an engineering job,
+        Head of Design for a design job, etc.) so we don't return PM
+        leads for an SDE role.
+
         Returns empty list on any non-200 / network error — callers
         treat "no contacts" as a normal outcome, not a failure.
         """
         if not self.is_configured:
             return []
 
+        hm_keywords = hm_titles_for_job(job_title)
         contacts: list[ApolloContact] = []
         for role_type, keywords in (
-            ("hm", CONTACT_HM_TITLE_KEYWORDS),
+            ("hm", hm_keywords),
             ("recruiter", CONTACT_RECRUITER_TITLE_KEYWORDS),
         ):
             raw_people = self._search(

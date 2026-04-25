@@ -114,6 +114,32 @@ class TestSearchPeopleAtCompany:
         ApolloClient(api_key="k", http_client=fake).search_people_at_company("X")
         assert len(fake.calls) == 2
 
+    def test_engineering_job_uses_engineering_hm_titles(self):
+        """An SDE/Engineer job should query engineering-leadership titles."""
+        fake = _FakeClient([
+            _FakeResponse(200, {"people": []}),
+            _FakeResponse(200, {"people": []}),
+        ])
+        ApolloClient(api_key="k", http_client=fake).search_people_at_company(
+            "Acme", job_title="Senior Backend Engineer",
+        )
+        hm_call = fake.calls[0]
+        person_titles = hm_call["json"]["person_titles"]
+        joined = " ".join(t.lower() for t in person_titles)
+        assert "engineering manager" in joined
+        assert "head of product" not in joined
+
+    def test_unknown_job_title_falls_back_to_pm_titles(self):
+        fake = _FakeClient([
+            _FakeResponse(200, {"people": []}),
+            _FakeResponse(200, {"people": []}),
+        ])
+        ApolloClient(api_key="k", http_client=fake).search_people_at_company(
+            "Acme", job_title="Janitor",
+        )
+        joined = " ".join(t.lower() for t in fake.calls[0]["json"]["person_titles"])
+        assert "head of product" in joined
+
     def test_non_200_returns_empty(self):
         fake = _FakeClient([
             _FakeResponse(401, text="Unauthorized"),
