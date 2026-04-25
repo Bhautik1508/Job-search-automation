@@ -828,6 +828,15 @@
   color: #fda4af;
 }
 
+.panel__info {
+  padding: 8px 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: var(--radius-md);
+  font-size: 0.8rem;
+  color: #93c5fd;
+}
+
 .panel__empty {
   padding: var(--space-md);
   text-align: center;

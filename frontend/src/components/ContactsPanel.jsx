@@ -11,6 +11,7 @@ export default function ContactsPanel({ jobId, selectedContactId, onSelectContac
   const [loading, setLoading] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [error, setError] = useState(null)
+  const [info, setInfo] = useState(null)
 
   const load = useCallback(async () => {
     if (!jobId) return
@@ -39,6 +40,7 @@ export default function ContactsPanel({ jobId, selectedContactId, onSelectContac
   const handleEnrich = async () => {
     setEnriching(true)
     setError(null)
+    setInfo(null)
     try {
       const resp = await apiFetch(`/api/enrich-contacts?job_id=${jobId}`, {
         method: 'POST',
@@ -46,9 +48,23 @@ export default function ContactsPanel({ jobId, selectedContactId, onSelectContac
       if (!resp.ok) {
         const t = await resp.text().catch(() => '')
         setError(resp.status === 401 || resp.status === 403
-          ? 'Unauthorized — check VITE_API_KEY'
+          ? 'Unauthorized — check VITE_API_KEY matches API_KEY on backend'
           : `HTTP ${resp.status}${t ? `: ${t.slice(0, 160)}` : ''}`)
         return
+      }
+      const data = await resp.json()
+      const skipReasons = data.skip_reasons || {}
+      const skipKeys = Object.keys(skipReasons)
+      if (data.contacts_created > 0 || data.contacts_reused_from_cache > 0) {
+        setInfo(
+          `Found ${data.contacts_created} new + ${data.contacts_reused_from_cache} cached contact(s).`,
+        )
+      } else if (skipKeys.length) {
+        setInfo(`No contacts. Skipped: ${skipKeys.join(', ')}`)
+      } else if (data.provider_errors && data.provider_errors.length) {
+        setError(`Provider errors: ${data.provider_errors.slice(0, 2).join(' · ')}`)
+      } else {
+        setInfo('Pipeline ran but returned no contacts.')
       }
       await load()
     } catch (err) {
@@ -73,6 +89,7 @@ export default function ContactsPanel({ jobId, selectedContactId, onSelectContac
       </div>
 
       {error && <div className="panel__error">⚠️ {error}</div>}
+      {info && <div className="panel__info">ℹ️ {info}</div>}
 
       {loading && !contacts.length && (
         <div className="panel__empty">Loading contacts…</div>
