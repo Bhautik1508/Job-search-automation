@@ -160,9 +160,8 @@ class TestEnrichContactsEndpoint:
             _seed_job(
                 session,
                 verdict="STRONG_FIT",
-                company_tier="unicorn",
                 relevancy_score=90.0,
-                applied=False,
+                status="new",
             )
         finally:
             session.close()

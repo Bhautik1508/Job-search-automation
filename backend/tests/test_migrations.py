@@ -65,7 +65,7 @@ class TestMigrations:
             "ix_jobs_company_type",
             "ix_jobs_verdict",
             "ix_jobs_date_scraped",
-            "ix_jobs_applied_relevancy",
+            "ix_jobs_status",
         }
         missing = expected - index_names
         assert not missing, f"Missing indexes: {missing}"
@@ -83,7 +83,7 @@ class TestMigrations:
             "ix_jobs_company_type",
             "ix_jobs_verdict",
             "ix_jobs_date_scraped",
-            "ix_jobs_applied_relevancy",
+            "ix_jobs_status",
         }
         assert not (hot & index_names), "Hot indexes should be gone after downgrade"
 
@@ -151,7 +151,9 @@ class TestMigrations:
         }.issubset(indexes)
 
         uniques = {uq["name"] for uq in insp.get_unique_constraints("outreach_drafts")}
-        assert "uq_outreach_drafts_job_contact_channel" in uniques
+        # R4 widened the constraint to include connection_id; the legacy
+        # name lives only in pre-R4 schemas.
+        assert "uq_outreach_drafts_job_contact_channel_connection" in uniques
 
     def test_phase_8_downgrade_drops_outreach_table(self, fresh_db):
         cfg = _make_config(fresh_db)
@@ -177,3 +179,29 @@ class TestMigrations:
         cols = {c["name"] for c in inspect(engine).get_columns("outreach_drafts")}
         assert "case_study_link" not in cols
         assert "case_study_attachment" not in cols
+
+    def test_phase_r4_connections_table_present(self, fresh_db):
+        """0008 adds connections table + connection_id link on outreach_drafts."""
+        command.upgrade(_make_config(fresh_db), "head")
+        engine = create_engine(fresh_db)
+        insp = inspect(engine)
+
+        assert "connections" in set(insp.get_table_names())
+        conn_indexes = {ix["name"] for ix in insp.get_indexes("connections")}
+        assert {
+            "ix_connections_company_normalized",
+            "ix_connections_linkedin_url",
+        }.issubset(conn_indexes)
+
+        outreach_cols = {c["name"] for c in insp.get_columns("outreach_drafts")}
+        assert "connection_id" in outreach_cols
+
+    def test_phase_r4_downgrade_drops_connections(self, fresh_db):
+        cfg = _make_config(fresh_db)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0007_case_study")
+        engine = create_engine(fresh_db)
+        insp = inspect(engine)
+        assert "connections" not in set(insp.get_table_names())
+        outreach_cols = {c["name"] for c in insp.get_columns("outreach_drafts")}
+        assert "connection_id" not in outreach_cols

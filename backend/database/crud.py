@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.database.models import Contact, Job, JobContact, OutreachDraft, ScrapeScan
+from backend.database.models import (
+    Connection,
+    Contact,
+    Job,
+    JobContact,
+    OutreachDraft,
+    ScrapeScan,
+)
 
 
 # ------------------------------------------------------------------
@@ -99,8 +106,7 @@ JOB_STATUSES = (
 
 def update_job_status(session: Session, job_id: int, status: str) -> Job | None:
     """
-    Set a job's status to one of JOB_STATUSES and keep the legacy `applied`
-    bool in sync (anything past 'applied' in the funnel implies applied=True).
+    Set a job's status to one of JOB_STATUSES.
 
     Returns the updated Job, or None if the id doesn't exist.
     """
@@ -110,9 +116,6 @@ def update_job_status(session: Session, job_id: int, status: str) -> Job | None:
     if job is None:
         return None
     job.status = status
-    # Shadow-sync the legacy bool: applied/interviewing/offer all imply
-    # the user has applied. New/saved/rejected/hidden → not-applied.
-    job.applied = status in {"applied", "interviewing", "offer"}
     session.commit()
     session.refresh(job)
     return job
@@ -146,17 +149,9 @@ def update_job_scores(
     apply_priority: str,
     score_reasoning: str,
     missing_skills: str,
-    company_type: str,
-    company_tier: str | None = None,
-    funding_stage: str | None = None,
-    headcount_band: str | None = None,
+    company_type: str | None = None,
 ) -> Job:
-    """Update a job's scoring fields and commit.
-
-    Phase 6 adds optional `company_tier` / `funding_stage` / `headcount_band`.
-    Kept optional to keep the pre-Phase-6 contract stable for tests and any
-    other callers that only compute the domain classification.
-    """
+    """Update a job's scoring fields and commit."""
     job.relevancy_score = relevancy_score
     job.skills_match_score = skills_match_score
     job.domain_fit_score = domain_fit_score
@@ -167,13 +162,8 @@ def update_job_scores(
     job.apply_priority = apply_priority
     job.score_reasoning = score_reasoning
     job.missing_skills = missing_skills
-    job.company_type = company_type
-    if company_tier is not None:
-        job.company_tier = company_tier
-    if funding_stage is not None:
-        job.funding_stage = funding_stage
-    if headcount_band is not None:
-        job.headcount_band = headcount_band
+    if company_type is not None:
+        job.company_type = company_type
     job.date_scored = datetime.now(timezone.utc)
     session.commit()
     return job
@@ -420,14 +410,19 @@ def upsert_outreach_draft(
     status: str | None = None,
     case_study_link: str | None = None,
     case_study_attachment: str | None = None,
+    connection_id: int | None = None,
 ) -> OutreachDraft:
     """
-    Insert-or-update an outreach draft keyed on (job_id, contact_id, channel).
+    Insert-or-update an outreach draft keyed on
+    (job_id, contact_id, channel, connection_id).
 
     Regenerating replaces body/subject/tone in-place rather than accumulating
-    variants — the uniqueness constraint on the table enforces this at the DB
-    level. `status` is only overwritten when the caller passes it explicitly
+    variants. `status` is only overwritten when the caller passes it explicitly
     so we don't reset a "sent" draft back to "draft" when a user edits copy.
+
+    `connection_id` participates in the key for Phase R4 referral asks: two
+    referral asks for the same (job, HM) addressed to different warm peers
+    are independent rows.
     """
     existing = (
         session.query(OutreachDraft)
@@ -435,6 +430,7 @@ def upsert_outreach_draft(
             OutreachDraft.job_id == job_id,
             OutreachDraft.contact_id == contact_id,
             OutreachDraft.channel == channel,
+            OutreachDraft.connection_id == connection_id,
         )
         .first()
     )
@@ -468,6 +464,7 @@ def upsert_outreach_draft(
         status=status or "draft",
         case_study_link=case_study_link,
         case_study_attachment=case_study_attachment,
+        connection_id=connection_id,
         created_at=now,
         updated_at=now,
     )
@@ -490,22 +487,6 @@ def get_outreach_drafts_for_job(session: Session, job_id: int) -> list[OutreachD
 def get_outreach_draft_by_id(session: Session, draft_id: int) -> OutreachDraft | None:
     """Fetch a single outreach draft by ID."""
     return session.query(OutreachDraft).filter(OutreachDraft.id == draft_id).first()
-
-
-def update_outreach_status(
-    session: Session,
-    draft_id: int,
-    status: str,
-) -> OutreachDraft | None:
-    """Update draft status (draft → sent → replied) and bump updated_at."""
-    draft = get_outreach_draft_by_id(session, draft_id)
-    if draft is None:
-        return None
-    draft.status = status
-    draft.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(draft)
-    return draft
 
 
 def update_outreach_draft(
@@ -536,3 +517,146 @@ def update_outreach_draft(
     session.commit()
     session.refresh(draft)
     return draft
+
+
+# ------------------------------------------------------------------
+# Connection CRUD (Phase R4 — warm referrals)
+# ------------------------------------------------------------------
+
+# Tokens stripped from a company name before comparing. "google india pvt
+# ltd" and "Google" should land in the same bucket.
+_COMPANY_NOISE = {
+    "inc", "inc.", "ltd", "ltd.", "limited", "llc", "llp",
+    "pvt", "pvt.", "private", "co", "co.", "corp", "corp.",
+    "corporation", "company", "india", "technologies", "technology",
+    "tech", "labs", "lab", "global", "the",
+}
+
+
+def normalize_company(name: str) -> str:
+    """
+    Canonical form for fuzzy company match.
+
+    Lowercase, drop punctuation, drop common legal/locale noise tokens.
+    Returns "" when the name is empty so callers can early-out.
+    """
+    if not name:
+        return ""
+    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in name.lower())
+    tokens = [t for t in cleaned.split() if t and t not in _COMPANY_NOISE]
+    return " ".join(tokens)
+
+
+def upsert_connection(
+    session: Session,
+    *,
+    name: str,
+    company: str,
+    current_title: str | None = None,
+    linkedin_url: str | None = None,
+    source: str = "csv",
+) -> tuple[Connection, bool]:
+    """
+    Insert or update a Connection. Returns (row, created).
+
+    Dedup priority:
+      1. linkedin_url (when present) — that's the unambiguous identifier.
+      2. (name, company_normalized) fallback for rows without a URL.
+    """
+    company_norm = normalize_company(company)
+    now = datetime.now(timezone.utc)
+    existing: Connection | None = None
+
+    if linkedin_url:
+        existing = (
+            session.query(Connection)
+            .filter(Connection.linkedin_url == linkedin_url)
+            .first()
+        )
+    if existing is None:
+        existing = (
+            session.query(Connection)
+            .filter(
+                func.lower(Connection.name) == name.lower(),
+                Connection.company_normalized == company_norm,
+            )
+            .first()
+        )
+
+    if existing:
+        existing.name = name
+        existing.company = company
+        existing.company_normalized = company_norm
+        if current_title:
+            existing.current_title = current_title
+        if linkedin_url:
+            existing.linkedin_url = linkedin_url
+        existing.source = source
+        existing.last_synced_at = now
+        session.commit()
+        session.refresh(existing)
+        return existing, False
+
+    row = Connection(
+        name=name,
+        company=company,
+        company_normalized=company_norm,
+        current_title=current_title,
+        linkedin_url=linkedin_url,
+        source=source,
+        last_synced_at=now,
+        created_at=now,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row, True
+
+
+def find_connections_for_company(
+    session: Session,
+    company: str,
+    *,
+    limit: int = 25,
+) -> list[Connection]:
+    """
+    Return warm connections at `company`. Exact match on the normalized
+    company key first; if that returns nothing, fall back to substring
+    match on the normalized form (so "Google Cloud" still surfaces "Google"
+    connections when the job title pins it to a sub-org).
+    """
+    norm = normalize_company(company)
+    if not norm:
+        return []
+
+    exact = (
+        session.query(Connection)
+        .filter(Connection.company_normalized == norm)
+        .order_by(Connection.last_synced_at.desc())
+        .limit(limit)
+        .all()
+    )
+    if exact:
+        return exact
+
+    # Fuzzy fallback — token-overlap. We keep this simple (no trigrams /
+    # Levenshtein) since the connection list is typically a few thousand
+    # rows max and SQLite LIKE is fast enough.
+    head_token = norm.split()[0]
+    if not head_token:
+        return []
+    return (
+        session.query(Connection)
+        .filter(Connection.company_normalized.contains(head_token))
+        .order_by(Connection.last_synced_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_connection_by_id(session: Session, connection_id: int) -> Connection | None:
+    return session.query(Connection).filter(Connection.id == connection_id).first()
+
+
+def count_connections(session: Session) -> int:
+    return session.query(Connection).count()

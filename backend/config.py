@@ -54,7 +54,6 @@ DATABASE_URL = _get_database_url()
 # ------------------------------------------------------------------
 # Scraping
 # ------------------------------------------------------------------
-SEARCH_TERM = os.getenv("SEARCH_TERM", "Product Manager")
 TARGET_CITIES = [
     city.strip()
     for city in os.getenv("TARGET_CITIES", "Bangalore,Pune").split(",")
@@ -215,14 +214,6 @@ APIFY_PORTAL_PRIORITY = [
 # ------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "15"))
-
-# Scoring weights (must sum to 1.0)
-SCORE_WEIGHT_SKILLS = float(os.getenv("SCORE_WEIGHT_SKILLS", "0.30"))
-SCORE_WEIGHT_DOMAIN = float(os.getenv("SCORE_WEIGHT_DOMAIN", "0.25"))
-SCORE_WEIGHT_EXPERIENCE = float(os.getenv("SCORE_WEIGHT_EXPERIENCE", "0.20"))
-SCORE_WEIGHT_SENIORITY = float(os.getenv("SCORE_WEIGHT_SENIORITY", "0.15"))
-SCORE_WEIGHT_RECENCY = float(os.getenv("SCORE_WEIGHT_RECENCY", "0.10"))
 
 # Resume path (Phase 2)
 RESUME_PATH = os.getenv("RESUME_PATH", str(BACKEND_DIR / "resume" / "resume.pdf"))
@@ -234,10 +225,10 @@ GEMINI_JD_MAX_CHARS = int(os.getenv("GEMINI_JD_MAX_CHARS", "3000"))
 # ------------------------------------------------------------------
 # API auth & CORS (Phase 5)
 # ------------------------------------------------------------------
-# Mutation endpoints (/api/scrape, /api/score, /api/jobs/{id}/applied) require
-# this key via the `X-API-Key` header. If unset AND the service is running in
-# production, mutation endpoints return 503 — fail closed. In local dev, an
-# empty key disables the check to keep the developer loop friction-free.
+# Mutation endpoints (/api/scrape, /api/score, PATCH /api/jobs/{id}, etc.)
+# require this key via the `X-API-Key` header. If unset AND the service is
+# running in production, mutation endpoints return 503 — fail closed. In local
+# dev, an empty key disables the check to keep the developer loop friction-free.
 API_KEY = os.getenv("API_KEY", "")
 
 # CORS allowlist. In dev we always permit localhost. In production, only the
@@ -250,12 +241,6 @@ CORS_EXTRA_ORIGINS = [
     if o.strip()
 ]
 
-
-# ------------------------------------------------------------------
-# Alerts (Phase 4)
-# ------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ------------------------------------------------------------------
 # Instahyre (Phase 4.4)
@@ -286,24 +271,11 @@ JOBSPY_HOURS_OLD = 72         # Only fetch jobs posted in the last N hours
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY", "")
 APOLLO_API_BASE_URL = os.getenv("APOLLO_API_BASE_URL", "https://api.apollo.io/v1")
 
-# Enrichment-eligible tiers: only spend credits on companies worth the spend.
-CONTACT_ENRICHMENT_ELIGIBLE_TIERS = [
-    t.strip()
-    for t in os.getenv(
-        "CONTACT_ENRICHMENT_ELIGIBLE_TIERS",
-        "top_tier,unicorn,growth_startup",
-    ).split(",")
-    if t.strip()
-]
-
 # Only enrich for jobs scored at least this priority (STRONG_FIT or GOOD_FIT).
 CONTACT_ENRICHMENT_MIN_VERDICT = os.getenv("CONTACT_ENRICHMENT_MIN_VERDICT", "GOOD_FIT")
 
-# Cost guardrails — prevent runaway spend when a bug floods enrichment.
+# Cost guardrail — prevent runaway spend when a bug floods enrichment.
 CONTACT_ENRICHMENT_DAILY_CAP = int(os.getenv("CONTACT_ENRICHMENT_DAILY_CAP", "40"))
-CONTACT_ENRICHMENT_PER_COMPANY_CAP = int(
-    os.getenv("CONTACT_ENRICHMENT_PER_COMPANY_CAP", "3")
-)
 # 30-day cache — don't re-enrich a company more than once per month.
 CONTACT_CACHE_TTL_DAYS = int(os.getenv("CONTACT_CACHE_TTL_DAYS", "30"))
 

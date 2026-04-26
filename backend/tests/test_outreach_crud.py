@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.database.crud import (
     get_outreach_draft_by_id,
     get_outreach_drafts_for_job,
-    update_outreach_status,
+    update_outreach_draft,
     upsert_contact,
     upsert_outreach_draft,
 )
@@ -99,7 +99,7 @@ class TestUpsertOutreachDraft:
             db_session, job_id=job.id, contact_id=contact.id,
             channel="email", tone="peer-pm", body="v1",
         )
-        update_outreach_status(db_session, d.id, "sent")
+        update_outreach_draft(db_session, d.id, status="sent")
 
         regenerated = upsert_outreach_draft(
             db_session, job_id=job.id, contact_id=contact.id,
@@ -115,7 +115,7 @@ class TestUpsertOutreachDraft:
             channel="email", tone="peer-pm", body="v1",
         )
         assert d.status == "draft"
-        update_outreach_status(db_session, d.id, "sent")
+        update_outreach_draft(db_session, d.id, status="sent")
 
         # Explicit status= on upsert should still win.
         updated = upsert_outreach_draft(
@@ -151,8 +151,8 @@ class TestUpdateStatus:
             db_session, job_id=job.id, contact_id=contact.id,
             channel="email", tone="peer-pm", body="v1",
         )
-        updated = update_outreach_status(db_session, d.id, "replied")
+        updated = update_outreach_draft(db_session, d.id, status="replied")
         assert updated.status == "replied"
 
     def test_missing_id_returns_none(self, db_session):
-        assert update_outreach_status(db_session, 12345, "sent") is None
+        assert update_outreach_draft(db_session, 12345, status="sent") is None

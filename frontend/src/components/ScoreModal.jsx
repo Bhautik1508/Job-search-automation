@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import ScoreBar, { getScoreColor } from './ScoreBar'
 import ContactsPanel from './ContactsPanel'
+import ConnectionsPanel from './ConnectionsPanel'
 import OutreachPanel from './OutreachPanel'
 
 /**
@@ -8,6 +9,7 @@ import OutreachPanel from './OutreachPanel'
  */
 export default function ScoreModal({ job, onClose }) {
   const [selectedContactId, setSelectedContactId] = useState(null)
+  const [outreachRefresh, setOutreachRefresh] = useState(0)
 
   if (!job) return null
 
@@ -112,10 +114,18 @@ export default function ScoreModal({ job, onClose }) {
           onSelectContact={setSelectedContactId}
         />
 
+        {/* Warm Connections (Phase R4) */}
+        <ConnectionsPanel
+          jobId={job.id}
+          targetContactId={selectedContactId}
+          onDraftCreated={() => setOutreachRefresh((n) => n + 1)}
+        />
+
         {/* Outreach Drafts (Phase 8) */}
         <OutreachPanel
           jobId={job.id}
           contactId={selectedContactId}
+          refreshKey={outreachRefresh}
         />
 
         {/* Job Link */}

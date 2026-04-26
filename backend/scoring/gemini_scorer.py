@@ -7,10 +7,8 @@ Uses the `google-genai` SDK with structured JSON output via Pydantic schemas.
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 from google.genai import types

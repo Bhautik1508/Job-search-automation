@@ -12,7 +12,7 @@ Phase 4.5 enhancements:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from backend.scrapers.base_scraper import BaseScraper, RawJob
 from backend.config import (

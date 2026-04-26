@@ -16,7 +16,7 @@ const TONES = [
 
 const STATUSES = ['draft', 'sent', 'replied']
 
-export default function OutreachPanel({ jobId, contactId }) {
+export default function OutreachPanel({ jobId, contactId, refreshKey = 0 }) {
   const [drafts, setDrafts] = useState([])
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -43,7 +43,7 @@ export default function OutreachPanel({ jobId, contactId }) {
     }
   }, [jobId])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, refreshKey])
 
   const handleGenerate = async () => {
     if (!contactId) {

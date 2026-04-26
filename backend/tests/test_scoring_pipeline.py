@@ -18,7 +18,6 @@ from backend.database.crud import (
     insert_job, get_unscored_jobs, get_scored_jobs, update_job_scores,
 )
 from backend.scoring.gemini_scorer import GeminiScorer, JobScoreResult
-from backend.scoring.company_classifier import CompanyClassifier
 from backend.scoring.scoring_pipeline import ScoringPipeline
 
 
@@ -252,12 +251,10 @@ class TestScoringPipeline:
     def test_pipeline_run_scores_jobs(self):
         """Full pipeline run with mocked Gemini and in-memory DB."""
         scorer = self._make_scorer_mock()
-        classifier = CompanyClassifier()
 
         pipeline = ScoringPipeline(
             resume_text="Experienced PM with 5 years in fintech...",
             scorer=scorer,
-            classifier=classifier,
             db_url="sqlite:///:memory:",
         )
 
@@ -288,7 +285,6 @@ class TestScoringPipeline:
         scored_jobs = get_scored_jobs(session)
         assert len(scored_jobs) == 1
         assert scored_jobs[0].relevancy_score == 82.5
-        assert scored_jobs[0].company_type == "fintech"
         session.close()
 
     def test_pipeline_run_empty_db(self):
@@ -385,6 +381,6 @@ class TestHoursSincePosted:
 
     def test_naive_datetime(self):
         """Naive datetimes (no timezone) are treated as UTC."""
-        posted = datetime.utcnow() - timedelta(hours=5)
+        posted = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
         hours = ScoringPipeline._hours_since_posted(posted)
         assert 4.9 < hours < 5.1

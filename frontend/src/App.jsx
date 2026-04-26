@@ -77,7 +77,7 @@ export default function App() {
           return prev.filter((j) => j.id !== jobId)
         }
         return prev.map((j) =>
-          j.id === jobId ? { ...j, status: data.status, applied: data.applied } : j,
+          j.id === jobId ? { ...j, status: data.status } : j,
         )
       })
     } catch (err) {

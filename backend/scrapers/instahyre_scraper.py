@@ -557,7 +557,7 @@ class InstahyreScraper(BaseScraper):
 
             loc_match = location_lower in loc_lower
             if not loc_match:
-                for canonical, aliases in location_aliases.items():
+                for aliases in location_aliases.values():
                     if any(alias in location_lower for alias in aliases):
                         loc_match = any(alias in loc_lower for alias in aliases)
                         break

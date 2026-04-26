@@ -976,3 +976,67 @@
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
+
+/* ---------- Connections (Phase R4) ---------- */
+.connections__actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.connection-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.connection-item__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.connection-item__name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.connection-item__title {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.connection-item__meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.connection-item__meta a {
+  color: var(--text-accent);
+}
+.connection-item__meta a:hover {
+  color: var(--accent-primary-hover);
+}
+
+.connection-item__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.badge--source {
+  background: #f0fdf4;
+  color: #166534;
+  border-color: #bbf7d0;
+}

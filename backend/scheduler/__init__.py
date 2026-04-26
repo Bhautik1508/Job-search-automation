@@ -73,7 +73,7 @@ def _run_enrich() -> dict:
         pipeline = EnrichmentPipeline(session)
         eligible = (
             session.query(Job)
-            .filter(Job.applied == False)  # noqa: E712
+            .filter(Job.status.in_(("new", "saved")))
             .filter(Job.verdict.isnot(None))
             .order_by(Job.relevancy_score.desc().nullslast())
             .limit(50)  # hard cap per cycle — cost guardrails enforce the real budget

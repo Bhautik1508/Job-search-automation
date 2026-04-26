@@ -4,10 +4,9 @@ from the database:
 
   1. Load unscored jobs from DB
   2. Parse resume text
-  3. Classify each job's company (fintech/bank/nbfc/other)
-  4. Score each job via Gemini
-  5. Compute recency + domain bonuses
-  6. Update DB with scores
+  3. Score each job via Gemini
+  4. Compute recency bonus
+  5. Update DB with scores
 
 Handles rate limiting and batch processing.
 """
@@ -17,14 +16,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
-from backend.database.models import Job, get_engine, get_session_factory, init_db
+from backend.database.models import get_engine, get_session_factory, init_db
 from backend.database.crud import get_unscored_jobs, update_job_scores
-from backend.resume.parser import ResumeParser, load_resume_text
-from backend.scoring.gemini_scorer import GeminiScorer, JobScoreResult, DailyQuotaExhausted
-from backend.scoring.company_classifier import CompanyClassifier
-from backend.scoring.tier_classifier import TierClassifier
+from backend.resume.parser import load_resume_text
+from backend.scoring.gemini_scorer import GeminiScorer, DailyQuotaExhausted
 from backend.config import BACKEND_DIR
 
 
@@ -32,8 +27,8 @@ class ScoringPipeline:
     """
     End-to-end scoring pipeline.
 
-    Reads unscored jobs from the DB, scores them via Gemini, classifies
-    their companies, and writes scores back.
+    Reads unscored jobs from the DB, scores them via Gemini, and writes
+    scores back.
     """
 
     def __init__(
@@ -41,8 +36,6 @@ class ScoringPipeline:
         resume_path: str | Path | None = None,
         resume_text: str | None = None,
         scorer: GeminiScorer | None = None,
-        classifier: CompanyClassifier | None = None,
-        tier_classifier: TierClassifier | None = None,
         db_url: str | None = None,
         batch_size: int = 15,
     ):
@@ -52,20 +45,15 @@ class ScoringPipeline:
         elif resume_path:
             self._resume_text = load_resume_text(resume_path)
         else:
-            # Default: look for resume in backend/resume/
             default_path = BACKEND_DIR / "resume" / "resume.pdf"
             if default_path.exists():
                 self._resume_text = load_resume_text(default_path)
             else:
                 self._resume_text = None
 
-        # Scorer
         self.scorer = scorer or GeminiScorer()
-        self.classifier = classifier or CompanyClassifier()
-        self.tier_classifier = tier_classifier or TierClassifier()
         self.batch_size = batch_size
 
-        # DB
         self._engine = get_engine(db_url)
         init_db(self._engine)
         self._Session = get_session_factory(self._engine)
@@ -92,7 +80,6 @@ class ScoringPipeline:
         session = self._Session()
 
         try:
-            # Step 1: Get unscored jobs
             unscored = get_unscored_jobs(session, limit=limit or 1000)
             total = len(unscored)
             print(f"\n📋 Found {total} unscored jobs")
@@ -118,23 +105,9 @@ class ScoringPipeline:
                 print(f"\n[{i + 1}/{total}] Scoring: {job.title} @ {job.company}")
 
                 try:
-                    # Classify company (domain + tier)
-                    company_type, confidence = self.classifier.classify(job.company or "")
-                    domain_bonus = self.classifier.get_domain_bonus(company_type)
-
-                    tier_profile = self.tier_classifier.classify(job.company or "")
-                    tier_bonus = self.tier_classifier.get_tier_bonus(tier_profile.tier)
-
-                    if company_type != "other":
-                        print(f"   🏦 Company type: {company_type} (confidence: {confidence:.2f})")
-                    if tier_profile.tier != "other":
-                        print(f"   🏷️  Tier: {tier_profile.tier} ({tier_profile.stage}, {tier_profile.headcount})")
-
-                    # Compute recency score
                     hours_since = self._hours_since_posted(job.date_posted)
                     recency = GeminiScorer.compute_recency_score(hours_since)
 
-                    # Score with Gemini
                     result = self.scorer.score_job(
                         resume_text=self._resume_text,
                         job_title=job.title,
@@ -144,20 +117,16 @@ class ScoringPipeline:
                     )
 
                     if result is None:
-                        print(f"   ❌ Scoring failed — skipping")
+                        print("   ❌ Scoring failed — skipping")
                         failed += 1
                         continue
 
-                    # Compute final weighted score.
-                    # Domain bonus (fintech/bank) and tier bonus (top_tier/unicorn)
-                    # both push relevancy upward. Capped at 100 inside the scorer.
                     final_score = self.scorer.compute_final_score(
                         result,
                         recency_score=recency,
-                        domain_bonus=domain_bonus + tier_bonus,
+                        domain_bonus=0.0,
                     )
 
-                    # Update DB
                     update_job_scores(
                         session,
                         job,
@@ -171,10 +140,6 @@ class ScoringPipeline:
                         apply_priority=result.apply_priority,
                         score_reasoning=result.reasoning,
                         missing_skills=", ".join(result.missing_skills),
-                        company_type=company_type,
-                        company_tier=tier_profile.tier,
-                        funding_stage=tier_profile.stage,
-                        headcount_band=tier_profile.headcount,
                     )
 
                     print(f"   ✅ Score: {final_score} | {result.verdict} | {result.apply_priority}")
@@ -208,7 +173,6 @@ class ScoringPipeline:
         if date_posted is None:
             return None
         now = datetime.now(timezone.utc)
-        # Ensure date_posted is timezone-aware
         if date_posted.tzinfo is None:
             date_posted = date_posted.replace(tzinfo=timezone.utc)
         delta = now - date_posted

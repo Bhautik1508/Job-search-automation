@@ -161,9 +161,7 @@ class TestHealthCheck:
         """GET /api/health returns status ok."""
         resp = client.get("/api/health")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
-        assert data["service"] == "job-search-automation"
+        assert resp.json() == {"status": "ok"}
 
 
 # ==================================================================
@@ -314,41 +312,10 @@ class TestGetJob:
         expected_fields = [
             "id", "title", "company", "location", "source_portal",
             "relevancy_score", "verdict", "apply_priority",
-            "company_type", "applied", "date_scraped",
+            "company_type", "status", "date_scraped",
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
-
-
-# ==================================================================
-# Tests: Toggle Applied
-# ==================================================================
-
-class TestToggleApplied:
-    def test_mark_applied(self, client, seeded_db):
-        """PATCH /api/jobs/{id}/applied marks job as applied."""
-        job_id = seeded_db[0].id
-        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["applied"] is True
-
-        # Verify it persisted
-        get_resp = client.get(f"/api/jobs/{job_id}")
-        assert get_resp.json()["applied"] is True
-
-    def test_unmark_applied(self, client, seeded_db):
-        """Can unmark a previously applied job."""
-        job_id = seeded_db[0].id
-        client.patch(f"/api/jobs/{job_id}/applied?applied=true")
-        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=false")
-        assert resp.status_code == 200
-        assert resp.json()["applied"] is False
-
-    def test_applied_not_found(self, client):
-        """PATCH on non-existent job returns 404."""
-        resp = client.patch("/api/jobs/9999/applied?applied=true")
-        assert resp.status_code == 404
 
 
 # ==================================================================
@@ -360,7 +327,6 @@ class TestJobStatus:
         job_id = seeded_db[0].id
         body = client.get(f"/api/jobs/{job_id}").json()
         assert body["status"] == "new"
-        assert body["applied"] is False
 
     def test_patch_status_round_trip(self, client, seeded_db):
         job_id = seeded_db[0].id
@@ -368,8 +334,6 @@ class TestJobStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "interviewing"
-        # interviewing implies applied=True via the shadow-sync
-        assert body["applied"] is True
 
     def test_patch_status_rejects_unknown(self, client, seeded_db):
         job_id = seeded_db[0].id
@@ -403,15 +367,6 @@ class TestJobStatus:
         body = client.get("/api/jobs?status=all").json()
         ids = {j["id"] for j in body["jobs"]}
         assert seeded_db[0].id in ids
-
-    def test_legacy_applied_endpoint_still_writes_status(self, client, seeded_db):
-        """The R1 /applied shim should write the new status enum."""
-        job_id = seeded_db[0].id
-        client.patch(f"/api/jobs/{job_id}/applied?applied=true")
-        body = client.get(f"/api/jobs/{job_id}").json()
-        assert body["status"] == "applied"
-        assert body["applied"] is True
-
 
 # ==================================================================
 # Tests: Stats
@@ -484,12 +439,12 @@ class TestStats:
         assert isinstance(data["by_priority"], list)
 
     def test_stats_applied_count(self, client, seeded_db):
-        """Applied count updates after toggling."""
+        """Applied count updates after status patch."""
         resp = client.get("/api/stats")
         assert resp.json()["applied_count"] == 0
 
         job_id = seeded_db[0].id
-        client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        client.patch(f"/api/jobs/{job_id}", json={"status": "applied"})
 
         resp = client.get("/api/stats")
         assert resp.json()["applied_count"] == 1
@@ -498,7 +453,6 @@ class TestStats:
         """
         Regression test: /api/stats should use ≤5 SELECT queries.
         The pre-optimization version fired ~10 separate COUNTs.
-        Phase 6 added one more GROUP BY for company_tier breakdown.
         """
         select_count = 0
 
@@ -516,68 +470,6 @@ class TestStats:
         assert resp.status_code == 200
         assert select_count <= 5, f"Expected ≤5 SELECTs, got {select_count}"
 
-
-# ==================================================================
-# Tests: Phase 6 company-tier endpoints
-# ==================================================================
-
-class TestCompanyTier:
-    """Cover the Phase 6 additions: tier column in JobResponse, tier filter
-    on /api/jobs, tier breakdown in /api/stats, /api/companies/careers."""
-
-    def _seed_tier_jobs(self):
-        """Seed jobs with known company_tier values."""
-        session = _TestSession()
-        try:
-            session.query(Job).delete()
-            jobs = [
-                _make_job(company="Google", dedup_hash="t_top", company_tier="top_tier",
-                          funding_stage="public", headcount_band="5000+"),
-                _make_job(company="Razorpay", dedup_hash="t_uni1", company_tier="unicorn",
-                          funding_stage="series_f", headcount_band="1000-5000"),
-                _make_job(company="CRED", dedup_hash="t_uni2", company_tier="unicorn",
-                          funding_stage="series_f", headcount_band="1000-5000"),
-                _make_job(company="Jupiter", dedup_hash="t_growth",
-                          company_tier="growth_startup", funding_stage="series_c"),
-            ]
-            for j in jobs:
-                session.add(j)
-            session.commit()
-        finally:
-            session.close()
-
-    def test_job_response_includes_tier_fields(self, client):
-        self._seed_tier_jobs()
-        resp = client.get("/api/jobs?company_tier=top_tier")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["total"] == 1
-        job = body["jobs"][0]
-        assert job["company_tier"] == "top_tier"
-        assert job["funding_stage"] == "public"
-        assert job["headcount_band"] == "5000+"
-
-    def test_jobs_filter_by_company_tier(self, client):
-        self._seed_tier_jobs()
-        resp = client.get("/api/jobs?company_tier=unicorn")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["total"] == 2
-        tiers = {j["company_tier"] for j in body["jobs"]}
-        assert tiers == {"unicorn"}
-
-    def test_stats_includes_tier_breakdown(self, client):
-        self._seed_tier_jobs()
-        resp = client.get("/api/stats")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["top_tier_count"] == 1
-        assert body["unicorn_count"] == 2
-        assert body["growth_startup_count"] == 1
-        assert body["early_startup_count"] == 0
-
-        tiers = {row["tier"]: row["count"] for row in body["by_company_tier"]}
-        assert tiers == {"top_tier": 1, "unicorn": 2, "growth_startup": 1}
 
 # ==================================================================
 # Phase 6.5 — Scheduler status endpoint
@@ -674,8 +566,8 @@ class TestSchedulerStatus:
 
 class TestApiKeyAuth:
     """
-    Verify the X-API-Key dependency on /api/scrape, /api/score and PATCH
-    /api/jobs/*/applied. Default test env has API_KEY unset AND
+    Verify the X-API-Key dependency on /api/scrape, /api/score and
+    PATCH /api/jobs/{id}. Default test env has API_KEY unset AND
     IS_PRODUCTION=False, so auth falls through — which we already exercised
     in the mutation tests above. Here we cover the three other states:
 
@@ -692,14 +584,15 @@ class TestApiKeyAuth:
     def test_missing_key_rejected(self, client, seeded_db, monkeypatch):
         self._patch_key(monkeypatch, "secret-abc")
         job_id = seeded_db[0].id
-        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        resp = client.patch(f"/api/jobs/{job_id}", json={"status": "applied"})
         assert resp.status_code == 401
 
     def test_wrong_key_rejected(self, client, seeded_db, monkeypatch):
         self._patch_key(monkeypatch, "secret-abc")
         job_id = seeded_db[0].id
         resp = client.patch(
-            f"/api/jobs/{job_id}/applied?applied=true",
+            f"/api/jobs/{job_id}",
+            json={"status": "applied"},
             headers={"X-API-Key": "wrong"},
         )
         assert resp.status_code == 401
@@ -708,7 +601,8 @@ class TestApiKeyAuth:
         self._patch_key(monkeypatch, "secret-abc")
         job_id = seeded_db[0].id
         resp = client.patch(
-            f"/api/jobs/{job_id}/applied?applied=true",
+            f"/api/jobs/{job_id}",
+            json={"status": "applied"},
             headers={"X-API-Key": "secret-abc"},
         )
         assert resp.status_code == 200
@@ -719,14 +613,14 @@ class TestApiKeyAuth:
         """Missing API_KEY in production must block mutations (503)."""
         self._patch_key(monkeypatch, "", production=True)
         job_id = seeded_db[0].id
-        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        resp = client.patch(f"/api/jobs/{job_id}", json={"status": "applied"})
         assert resp.status_code == 503
 
     def test_dev_mode_without_key_is_open(self, client, seeded_db, monkeypatch):
         """Dev convenience: empty API_KEY + not production → auth disabled."""
         self._patch_key(monkeypatch, "", production=False)
         job_id = seeded_db[0].id
-        resp = client.patch(f"/api/jobs/{job_id}/applied?applied=true")
+        resp = client.patch(f"/api/jobs/{job_id}", json={"status": "applied"})
         assert resp.status_code == 200
 
     def test_read_endpoints_never_require_key(self, client, seeded_db, monkeypatch):

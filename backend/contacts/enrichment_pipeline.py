@@ -12,8 +12,7 @@ Flow:
 
 Eligibility:
     - verdict at or above CONTACT_ENRICHMENT_MIN_VERDICT
-    - company_tier in CONTACT_ENRICHMENT_ELIGIBLE_TIERS
-    - job.applied is False (we don't enrich already-applied jobs)
+    - status is "new" or "saved" (not in/past the applied funnel)
 
 This keeps Apollo spend focused on high-quality, still-actionable jobs.
 """
@@ -26,10 +25,7 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
-from backend.config import (
-    CONTACT_ENRICHMENT_ELIGIBLE_TIERS,
-    CONTACT_ENRICHMENT_MIN_VERDICT,
-)
+from backend.config import CONTACT_ENRICHMENT_MIN_VERDICT
 from backend.contacts.apollo_client import ApolloClient, ApolloContact, iter_unique_contacts
 from backend.contacts.apify_linkedin_client import ApifyLinkedInClient
 from backend.contacts.cost_guardrails import ContactGuardrails
@@ -95,7 +91,6 @@ class EnrichmentPipeline:
         hunter_client: HunterClient | None = None,
         linkedin_client: ApifyLinkedInClient | None = None,
         guardrails: ContactGuardrails | None = None,
-        eligible_tiers: Iterable[str] | None = None,
         min_verdict: str | None = None,
     ):
         self.session = session
@@ -103,11 +98,6 @@ class EnrichmentPipeline:
         self.hunter_client = hunter_client or HunterClient()
         self.linkedin_client = linkedin_client or ApifyLinkedInClient()
         self.guardrails = guardrails or ContactGuardrails(session)
-        self.eligible_tiers = set(
-            eligible_tiers
-            if eligible_tiers is not None
-            else CONTACT_ENRICHMENT_ELIGIBLE_TIERS
-        )
         self.min_verdict = (min_verdict or CONTACT_ENRICHMENT_MIN_VERDICT).upper()
         self._min_verdict_rank = _VERDICT_RANK.get(self.min_verdict, 3)
 
@@ -118,7 +108,7 @@ class EnrichmentPipeline:
     def run(self, jobs: Iterable[Job], *, skip_eligibility: bool = False) -> EnrichmentResult:
         """Enrich the given iterable of jobs.
 
-        When ``skip_eligibility`` is True, the verdict/tier/applied gates are
+        When ``skip_eligibility`` is True, the verdict/status gates are
         bypassed — used by the per-job admin path where the caller has
         already decided this job is worth the credits.
         """
@@ -150,8 +140,10 @@ class EnrichmentPipeline:
 
     def _ineligible_reason(self, job: Job) -> str | None:
         """Return None when eligible, else a short skip-reason key."""
-        if job.applied:
-            return "already_applied"
+        # Status gate: anything in or past the applied funnel is no longer
+        # actionable for cold outreach.
+        if job.status in {"applied", "interviewing", "offer", "rejected", "hidden"}:
+            return f"status_{job.status}"
 
         if not job.verdict:
             return "unscored"
@@ -159,10 +151,6 @@ class EnrichmentPipeline:
         if rank < self._min_verdict_rank:
             return f"verdict_below_{self.min_verdict.lower()}"
 
-        # Tier gate: skip when config specifies eligible tiers AND the job's
-        # tier isn't in the list. An empty config means "no tier gate".
-        if self.eligible_tiers and job.company_tier not in self.eligible_tiers:
-            return "tier_not_eligible"
         return None
 
     def _enrich_one(self, job: Job, result: EnrichmentResult) -> None:

@@ -7,7 +7,6 @@ Endpoints:
     GET   /api/stats             — Dashboard KPI summary
     GET   /api/scheduler/status  — Background scheduler liveness
     PATCH /api/jobs/{id}         — Update R2 status (new..hidden)
-    PATCH /api/jobs/{id}/applied — Legacy applied toggle (maps to status)
     POST  /api/scrape            — Trigger a scrape cycle
     POST  /api/score             — Trigger scoring of unscored jobs
     POST  /api/enrich-contacts   — Run contact-enrichment pipeline (Phase 7)
@@ -22,12 +21,11 @@ Endpoints:
 from __future__ import annotations
 
 import math
-import os
 import threading
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -37,17 +35,18 @@ from backend.database.models import (
     Contact,
     Job,
     JobContact,
-    OutreachDraft,
     ScrapeScan,
     get_engine,
     get_session_factory,
     init_db,
 )
 from backend.api.schemas import (
-    CompanyTierCount,
     CompanyTypeCount,
+    ConnectionImportResponse,
+    ConnectionResponse,
     ContactResponse,
     EnrichmentResponse,
+    JobConnectionsResponse,
     JobContactsResponse,
     JobListResponse,
     JobOutreachResponse,
@@ -57,6 +56,7 @@ from backend.api.schemas import (
     OutreachDraftResponse,
     OutreachStatusUpdate,
     PriorityCount,
+    ReferralAskRequest,
     SchedulerStatusResponse,
     StatsResponse,
     VerdictCount,
@@ -152,21 +152,8 @@ _action_lock = threading.Lock()
 
 @app.get("/api/health")
 def health_check():
-    """Liveness + scoring-readiness probe.
-
-    Includes resume + Gemini status so deployment env issues
-    (missing resume.pdf, missing GEMINI_API_KEY) are visible without
-    triggering a full scoring run.
-    """
-    from backend.config import BACKEND_DIR, GEMINI_API_KEY
-    resume_path = BACKEND_DIR / "resume" / "resume.pdf"
-    return {
-        "status": "ok",
-        "service": "job-search-automation",
-        "resume_pdf_exists": resume_path.exists(),
-        "resume_pdf_path": str(resume_path),
-        "gemini_configured": bool(GEMINI_API_KEY) and GEMINI_API_KEY != "your_gemini_api_key_here",
-    }
+    """Minimal liveness probe."""
+    return {"status": "ok"}
 
 
 # ------------------------------------------------------------------
@@ -181,7 +168,6 @@ def list_jobs(
     max_score: float | None = Query(None, ge=0, le=100),
     priority: str | None = Query(None),
     company_type: str | None = Query(None),
-    company_tier: str | None = Query(None),
     verdict: str | None = Query(None),
     status: str | None = Query(
         None,
@@ -212,8 +198,6 @@ def list_jobs(
             query = query.filter(Job.apply_priority == priority)
         if company_type:
             query = query.filter(Job.company_type == company_type)
-        if company_tier:
-            query = query.filter(Job.company_tier == company_tier)
         if verdict:
             query = query.filter(Job.verdict == verdict)
 
@@ -286,27 +270,7 @@ def update_job(job_id: int, payload: JobStatusUpdate):
         job = update_job_status(session, job_id, payload.status)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        return {"id": job.id, "status": job.status, "applied": job.applied}
-    finally:
-        session.close()
-
-
-@app.patch("/api/jobs/{job_id}/applied", dependencies=[Depends(require_api_key)])
-def toggle_applied(job_id: int, applied: bool = Query(True)):
-    """Legacy R1 endpoint — maps to the R2 status enum.
-
-    `applied=true` → status='applied'; `applied=false` → status='new'.
-    Kept for one release so older frontends keep working; R5 removes it.
-    """
-    from backend.database.crud import update_job_status
-
-    target = "applied" if applied else "new"
-    session = _get_session()
-    try:
-        job = update_job_status(session, job_id, target)
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        return {"id": job.id, "applied": job.applied, "status": job.status}
+        return {"id": job.id, "status": job.status}
     finally:
         session.close()
 
@@ -320,7 +284,7 @@ def get_stats():
     """
     Dashboard KPI summary.
 
-    Uses three aggregated queries instead of ~10 scalar COUNTs:
+    Aggregated queries:
       1. Scalar aggregates (total, scored, applied, avg/max/min score).
       2. GROUP BY apply_priority.
       3. GROUP BY company_type.
@@ -328,12 +292,11 @@ def get_stats():
     """
     session = _get_session()
     try:
-        # Query 1: scalar aggregates in one round-trip
         scored_predicate = Job.relevancy_score.isnot(None)
         scalars = session.query(
             func.count(Job.id),
             func.sum(case((scored_predicate, 1), else_=0)),
-            func.sum(case((Job.applied == True, 1), else_=0)),
+            func.sum(case((Job.status == "applied", 1), else_=0)),
             func.avg(case((scored_predicate, Job.relevancy_score))),
             func.max(case((scored_predicate, Job.relevancy_score))),
             func.min(case((scored_predicate, Job.relevancy_score))),
@@ -347,7 +310,6 @@ def get_stats():
         min_score = round(scalars[5] or 0, 1)
         unscored_jobs = total_jobs - scored_jobs
 
-        # Query 2: priority breakdown
         prio_rows = (
             session.query(Job.apply_priority, func.count(Job.id))
             .filter(Job.apply_priority.isnot(None))
@@ -357,7 +319,6 @@ def get_stats():
         prio_counts = {p: c for p, c in prio_rows}
         by_priority = [PriorityCount(priority=p, count=c) for p, c in prio_rows]
 
-        # Query 3: company-type breakdown
         ctype_rows = (
             session.query(Job.company_type, func.count(Job.id))
             .filter(Job.company_type.isnot(None))
@@ -367,7 +328,6 @@ def get_stats():
         ctype_counts = {ct: c for ct, c in ctype_rows}
         by_company_type = [CompanyTypeCount(company_type=ct, count=c) for ct, c in ctype_rows]
 
-        # Query 4: verdict breakdown
         verdict_rows = (
             session.query(Job.verdict, func.count(Job.id))
             .filter(Job.verdict.isnot(None))
@@ -375,16 +335,6 @@ def get_stats():
             .all()
         )
         by_verdict = [VerdictCount(verdict=v, count=c) for v, c in verdict_rows]
-
-        # Query 5: company-tier breakdown (Phase 6)
-        tier_rows = (
-            session.query(Job.company_tier, func.count(Job.id))
-            .filter(Job.company_tier.isnot(None))
-            .group_by(Job.company_tier)
-            .all()
-        )
-        tier_counts = {t: c for t, c in tier_rows}
-        by_company_tier = [CompanyTierCount(tier=t, count=c) for t, c in tier_rows]
 
         return StatsResponse(
             total_jobs=total_jobs,
@@ -400,14 +350,9 @@ def get_stats():
             bank_count=ctype_counts.get("bank", 0),
             nbfc_count=ctype_counts.get("nbfc", 0),
             other_count=ctype_counts.get("other", 0),
-            top_tier_count=tier_counts.get("top_tier", 0),
-            unicorn_count=tier_counts.get("unicorn", 0),
-            growth_startup_count=tier_counts.get("growth_startup", 0),
-            early_startup_count=tier_counts.get("early_startup", 0),
             by_verdict=by_verdict,
             by_company_type=by_company_type,
             by_priority=by_priority,
-            by_company_tier=by_company_tier,
             applied_count=applied_count,
         )
     finally:
@@ -576,101 +521,6 @@ def get_actions_status():
         }
 
 
-@app.get("/api/debug/scrape-check", dependencies=[Depends(require_api_key)])
-def debug_scrape_check():
-    """
-    Diagnose why scrapes return 0 jobs. Reports per-engine config status +
-    Apify credit balance + the last scan's error message. Read-only.
-    """
-    from backend.scrapers.apify_scraper import ApifyScraper
-    from backend.scrapers.jobspy_scraper import JobSpyScraper
-    from backend.config import (
-        APIFY_API_TOKEN, APIFY_ACTORS, APIFY_MAX_CITIES, APIFY_MAX_PORTALS,
-        APIFY_PORTAL_PRIORITY, SEARCH_VARIANTS, TARGET_CITIES, INSTAHYRE_ENABLED,
-    )
-
-    apify = ApifyScraper()
-    apify_balance = apify.check_credit_balance() if apify.is_configured else None
-
-    # If credit_balance came back None with a configured token, the user wants
-    # to know *why*. Re-run the inner call without swallowing the exception.
-    apify_balance_error = None
-    if apify.is_configured and apify_balance is None:
-        try:
-            from apify_client import ApifyClient
-            _c = ApifyClient(apify.api_token)
-            _u = _c.user().get()
-            apify_balance_error = (
-                "user().get() returned empty" if not _u
-                else f"unexpected shape: keys={list(_u.keys())[:10]}"
-            )
-        except Exception as e:
-            apify_balance_error = f"{type(e).__name__}: {e}"
-
-    last_scan_info = None
-    last_scan_error = None
-    try:
-        session = _get_session()
-        try:
-            last_scan = session.query(ScrapeScan).order_by(ScrapeScan.started_at.desc()).first()
-            if last_scan:
-                last_scan_info = {
-                    "id": last_scan.id,
-                    "started_at": last_scan.started_at.isoformat() if last_scan.started_at else None,
-                    "status": last_scan.status,
-                    "portals": last_scan.portals,
-                    "jobs_found": last_scan.jobs_found,
-                    "jobs_new": last_scan.jobs_new,
-                    "jobs_duplicate": last_scan.jobs_duplicate,
-                    "error_message": last_scan.error_message,
-                }
-        finally:
-            session.close()
-    except Exception as e:
-        last_scan_error = f"{type(e).__name__}: {e}"
-
-    db_info = {"url_scheme": "unknown", "is_sqlite_tmp": False}
-    try:
-        if _engine is not None:
-            db_info = {
-                "url_scheme": str(_engine.url.drivername),
-                "host": str(_engine.url.host) if _engine.url.host else None,
-                "database": str(_engine.url.database) if _engine.url.database else None,
-                "is_sqlite_tmp": str(_engine.url).startswith("sqlite:////tmp"),
-            }
-    except Exception as e:
-        db_info["inspect_error"] = f"{type(e).__name__}: {e}"
-
-    return {
-        "apify": {
-            "token_present": bool(APIFY_API_TOKEN),
-            "token_prefix": (APIFY_API_TOKEN[:10] + "...") if APIFY_API_TOKEN else None,
-            "is_configured": apify.is_configured,
-            "actors_configured": APIFY_ACTORS,
-            "max_cities": APIFY_MAX_CITIES,
-            "max_portals": APIFY_MAX_PORTALS,
-            "portal_priority": APIFY_PORTAL_PRIORITY,
-            "credit_balance": apify_balance,
-            "credit_balance_error": apify_balance_error,
-        },
-        "database": db_info,
-        "last_scan_error": last_scan_error,
-        "jobspy": {
-            "note": "JobSpy scrapes LinkedIn/Indeed directly — typically blocked on cloud IPs (Render).",
-            "is_configured": True,
-        },
-        "instahyre": {
-            "enabled": INSTAHYRE_ENABLED,
-            "note": "Disabled by default in production (needs Playwright/Chromium).",
-        },
-        "search_config": {
-            "search_terms": SEARCH_VARIANTS,
-            "target_cities": TARGET_CITIES,
-        },
-        "last_scan": last_scan_info,
-    }
-
-
 # ------------------------------------------------------------------
 # Contacts (Phase 7)
 # ------------------------------------------------------------------
@@ -731,8 +581,8 @@ def enrich_contacts(
     Run the contact-enrichment pipeline.
 
     - With `?job_id=`: enrich only that job (admin/debug path).
-    - Without `job_id`: enrich up to `limit` unapplied jobs that are
-      eligible per verdict + tier config.
+    - Without `job_id`: enrich up to `limit` actionable jobs that are
+      eligible per the verdict gate.
     """
     from backend.contacts.enrichment_pipeline import EnrichmentPipeline
 
@@ -748,7 +598,7 @@ def enrich_contacts(
         else:
             candidates = (
                 session.query(Job)
-                .filter(Job.applied == False)  # noqa: E712 — SQLAlchemy idiom
+                .filter(Job.status.in_(("new", "saved")))
                 .filter(Job.verdict.isnot(None))
                 .order_by(Job.relevancy_score.desc().nullslast())
                 .limit(limit)
@@ -778,10 +628,7 @@ def generate_outreach_draft(payload: OutreachDraftRequest):
     the existing row's body/subject/tone in place rather than accumulating
     variants.
     """
-    from backend.database.crud import (
-        get_outreach_drafts_for_job,  # noqa: F401 — keeps import graph explicit
-        upsert_outreach_draft,
-    )
+    from backend.database.crud import upsert_outreach_draft
     from backend.outreach.generator import OutreachGenerator
 
     session = _get_session()
@@ -942,5 +789,156 @@ def prune_out_of_region_jobs(dry_run: bool = True):
                 if dry_run else f"Deleted {len(to_delete)} jobs."
             ),
         }
+    finally:
+        session.close()
+
+
+# ------------------------------------------------------------------
+# Connections (Phase R4 — warm referral layer)
+# ------------------------------------------------------------------
+
+@app.post(
+    "/api/connections/import",
+    response_model=ConnectionImportResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def import_connections(payload: dict = Body(...)):
+    """
+    Import warm connections from a CSV body.
+
+    Request shape: `{"csv": "<raw csv text>", "source": "linkedin"}`. Source
+    defaults to "csv". Existing connections (matched by linkedin_url, or
+    fallback (name, normalized_company)) are updated in place.
+    """
+    from backend.connections.csv_parser import parse_csv
+    from backend.database.crud import count_connections, upsert_connection
+
+    csv_text = (payload.get("csv") or "").strip() if isinstance(payload, dict) else ""
+    source = (payload.get("source") or "csv") if isinstance(payload, dict) else "csv"
+    if not csv_text:
+        raise HTTPException(status_code=400, detail="CSV body required.")
+
+    parsed, warnings = parse_csv(csv_text)
+    session = _get_session()
+    imported = 0
+    updated = 0
+    try:
+        for p in parsed:
+            _, created = upsert_connection(
+                session,
+                name=p.name,
+                company=p.company,
+                current_title=p.current_title,
+                linkedin_url=p.linkedin_url,
+                source=source,
+            )
+            if created:
+                imported += 1
+            else:
+                updated += 1
+        total = count_connections(session)
+    finally:
+        session.close()
+
+    return ConnectionImportResponse(
+        imported=imported,
+        updated=updated,
+        skipped=len(warnings),
+        warnings=warnings[:25],  # cap so the response stays small
+        total_connections=total,
+    )
+
+
+@app.get("/api/jobs/{job_id}/connections", response_model=JobConnectionsResponse)
+def list_job_connections(job_id: int, limit: int = Query(25, ge=1, le=100)):
+    """Return warm connections at this job's company (exact + fuzzy match)."""
+    from backend.database.crud import find_connections_for_company
+
+    session = _get_session()
+    try:
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        conns = find_connections_for_company(session, job.company, limit=limit)
+        return JobConnectionsResponse(
+            job_id=job_id,
+            company=job.company,
+            connections=[ConnectionResponse.model_validate(c) for c in conns],
+        )
+    finally:
+        session.close()
+
+
+@app.post(
+    "/api/outreach/referral-ask",
+    response_model=OutreachDraftResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def generate_referral_ask(payload: ReferralAskRequest):
+    """
+    Generate a warm-intro referral ask for `payload.job_id`.
+
+    The DM is addressed to `connection_id` (the warm peer); it asks them
+    to introduce the candidate to `target_contact_id` (the HM).
+    """
+    from backend.database.crud import (
+        get_connection_by_id,
+        upsert_outreach_draft,
+    )
+    from backend.outreach.generator import OutreachGenerator
+
+    session = _get_session()
+    try:
+        job = session.query(Job).filter(Job.id == payload.job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        connection = get_connection_by_id(session, payload.connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        contact = (
+            session.query(Contact).filter(Contact.id == payload.target_contact_id).first()
+        )
+        if not contact:
+            raise HTTPException(status_code=404, detail="Target contact not found")
+
+        generator = OutreachGenerator()
+        if not generator.is_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini API key not configured — cannot generate outreach.",
+            )
+
+        try:
+            result = generator.generate(
+                job=job,
+                contact=contact,
+                channel="referral_ask",
+                tone=payload.tone,
+                connection=connection,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if result is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Outreach generator returned no result.",
+            )
+
+        draft = upsert_outreach_draft(
+            session,
+            job_id=job.id,
+            contact_id=contact.id,
+            channel=result.channel,
+            tone=result.tone,
+            subject=result.subject,
+            body=result.body,
+            model=result.model,
+            case_study_link=result.case_study_link,
+            case_study_attachment=result.case_study_attachment,
+            connection_id=connection.id,
+        )
+        return OutreachDraftResponse.model_validate(draft)
     finally:
         session.close()

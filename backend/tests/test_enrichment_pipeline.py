@@ -56,8 +56,7 @@ def _job(
     *,
     company: str = "Razorpay",
     verdict: str = "GOOD_FIT",
-    company_tier: str = "unicorn",
-    applied: bool = False,
+    status: str = "new",
     title: str = "Product Manager",
     hash_suffix: str = "",
 ) -> Job:
@@ -68,8 +67,7 @@ def _job(
         source_portal="naukri",
         source_engine="test",
         verdict=verdict,
-        company_tier=company_tier,
-        applied=applied,
+        status=status,
         dedup_hash=f"hash_{company}_{verdict}_{title}_{hash_suffix}",
         date_scraped=datetime.now(timezone.utc),
     )
@@ -99,13 +97,13 @@ def _apollo_contact(
 
 class TestEligibility:
     def test_skips_applied_jobs(self, db_session):
-        job = _job(db_session, applied=True)
+        job = _job(db_session, status="applied")
         fake = _FakeApollo(contacts=[_apollo_contact()])
         pipe = EnrichmentPipeline(db_session, client=fake)
 
         result = pipe.run([job])
         assert result.jobs_skipped == 1
-        assert result.skip_reasons.get("already_applied") == 1
+        assert result.skip_reasons.get("status_applied") == 1
         assert fake.calls == []
 
     def test_skips_unscored_jobs(self, db_session):
@@ -128,16 +126,14 @@ class TestEligibility:
         )
         assert fake.calls == []
 
-    def test_skips_ineligible_tier(self, db_session):
-        job = _job(db_session, company_tier="early_startup")
+    def test_skips_hidden_jobs(self, db_session):
+        job = _job(db_session, status="hidden")
         fake = _FakeApollo(contacts=[_apollo_contact()])
-        pipe = EnrichmentPipeline(
-            db_session, client=fake,
-            eligible_tiers=["top_tier", "unicorn", "growth_startup"],
-        )
+        pipe = EnrichmentPipeline(db_session, client=fake)
 
         result = pipe.run([job])
-        assert result.skip_reasons.get("tier_not_eligible") == 1
+        assert result.skip_reasons.get("status_hidden") == 1
+        assert fake.calls == []
 
 
 class TestHappyPath:
@@ -206,7 +202,7 @@ class TestGuardrailPaths:
         """
         job = _job(db_session)
         guardrails = ContactGuardrails(
-            db_session, daily_cap=0, per_company_cap=5, cache_ttl_days=30,
+            db_session, daily_cap=0, cache_ttl_days=30,
         )
         fake = _FakeApollo(contacts=[_apollo_contact()])
         pipe = EnrichmentPipeline(db_session, client=fake, guardrails=guardrails)
@@ -351,8 +347,8 @@ class TestEnrichJobHelper:
         assert result.jobs_enriched == 1
 
     def test_enrich_job_bypasses_eligibility_by_default(self, db_session):
-        """Manual per-job calls should ignore tier/verdict gates."""
-        job = _job(db_session, verdict=None, company_tier="other")
+        """Manual per-job calls should ignore status/verdict gates."""
+        job = _job(db_session, verdict=None, status="applied")
         fake = _FakeApollo(contacts=[_apollo_contact()])
         pipe = EnrichmentPipeline(db_session, client=fake)
 
@@ -361,7 +357,7 @@ class TestEnrichJobHelper:
         assert result.skip_reasons == {}
 
     def test_enrich_job_with_eligibility_still_skips(self, db_session):
-        job = _job(db_session, verdict=None, company_tier="other")
+        job = _job(db_session, verdict=None)
         pipe = EnrichmentPipeline(db_session, client=_FakeApollo())
         result = pipe.enrich_job(job, skip_eligibility=False)
         assert result.jobs_skipped == 1

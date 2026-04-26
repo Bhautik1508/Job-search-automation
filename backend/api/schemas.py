@@ -5,7 +5,7 @@ Pydantic response schemas for the REST API.
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobResponse(BaseModel):
@@ -33,9 +33,6 @@ class JobResponse(BaseModel):
 
     # Classification
     company_type: str | None = None
-    company_tier: str | None = None
-    funding_stage: str | None = None
-    headcount_band: str | None = None
 
     # Scoring
     relevancy_score: float | None = None
@@ -51,7 +48,6 @@ class JobResponse(BaseModel):
 
     # Application (R2)
     status: str = "new"
-    applied: bool = False
     application_status: str | None = None
 
     # Timestamps
@@ -59,8 +55,7 @@ class JobResponse(BaseModel):
     date_scraped: datetime | None = None
     date_scored: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class JobListResponse(BaseModel):
@@ -85,11 +80,6 @@ class CompanyTypeCount(BaseModel):
 
 class PriorityCount(BaseModel):
     priority: str
-    count: int
-
-
-class CompanyTierCount(BaseModel):
-    tier: str
     count: int
 
 
@@ -119,8 +109,7 @@ class ContactResponse(BaseModel):
     link_confidence: float | None = None
     last_enriched_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class JobContactsResponse(BaseModel):
@@ -170,11 +159,11 @@ class OutreachDraftResponse(BaseModel):
     model: str | None = None
     case_study_link: str | None = None
     case_study_attachment: str | None = None
+    connection_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class JobOutreachResponse(BaseModel):
@@ -209,6 +198,54 @@ class JobStatusUpdate(BaseModel):
     )
 
 
+# ------------------------------------------------------------------
+# Connections (Phase R4)
+# ------------------------------------------------------------------
+
+class ConnectionResponse(BaseModel):
+    """A single warm connection row."""
+
+    id: int
+    name: str
+    company: str
+    current_title: str | None = None
+    linkedin_url: str | None = None
+    source: str
+    last_synced_at: datetime
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class JobConnectionsResponse(BaseModel):
+    """Connections matched to a specific job by company."""
+
+    job_id: int
+    company: str
+    connections: list[ConnectionResponse] = []
+
+
+class ConnectionImportResponse(BaseModel):
+    """Result of POST /api/connections/import."""
+
+    imported: int
+    updated: int
+    skipped: int
+    warnings: list[str] = []
+    total_connections: int
+
+
+class ReferralAskRequest(BaseModel):
+    """Payload for POST /api/outreach/referral-ask."""
+
+    job_id: int
+    connection_id: int = Field(description="Warm peer who'll receive the DM.")
+    target_contact_id: int = Field(
+        description="The HM the user wants the warm peer to introduce them to.",
+    )
+    tone: str = Field(default="peer-pm", description="founder-pitch | peer-pm | recruiter-formal")
+
+
 class StatsResponse(BaseModel):
     """Dashboard KPI summary."""
 
@@ -228,14 +265,8 @@ class StatsResponse(BaseModel):
     nbfc_count: int = 0
     other_count: int = 0
 
-    top_tier_count: int = 0
-    unicorn_count: int = 0
-    growth_startup_count: int = 0
-    early_startup_count: int = 0
-
     by_verdict: list[VerdictCount] = []
     by_company_type: list[CompanyTypeCount] = []
     by_priority: list[PriorityCount] = []
-    by_company_tier: list[CompanyTierCount] = []
 
     applied_count: int = 0

@@ -7,7 +7,7 @@ Note: Naukri is excluded because it requires CAPTCHA resolution.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pandas as pd
 

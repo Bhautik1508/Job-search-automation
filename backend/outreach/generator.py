@@ -27,7 +27,7 @@ from typing import Iterable
 from pydantic import BaseModel, Field
 
 from backend.config import GEMINI_API_KEY, GEMINI_MODEL
-from backend.database.models import Contact, Job
+from backend.database.models import Connection, Contact, Job
 from backend.outreach.portfolio_registry import (
     PortfolioItem,
     PortfolioRegistry,
@@ -76,14 +76,20 @@ _CHANNEL_RULES: dict[str, dict] = {
         ),
     },
     "referral_ask": {
-        "max_chars": 900,
-        "min_chars": 300,
+        # LinkedIn DM-sized — referral asks go to people you already know
+        # via LinkedIn, not to a cold inbox.
+        "max_chars": 700,
+        "min_chars": 250,
         "has_subject": False,
         "guidance": (
-            "Referral-ask — sent to a peer/PM already at the company. "
-            "Friendly, low-pressure. Name the role explicitly, explain "
-            "briefly why you'd be a fit (1 proof), and ask whether they'd "
-            "be open to a referral OR a 10-min chat first."
+            "Warm referral ask — a LinkedIn DM to someone you already know "
+            "who works at the target company. Open with the shared context "
+            "(use ### Recipient — Connection notes). Name the specific role "
+            "and the named hiring manager (### Intro target). One concise "
+            "proof point on why you'd be a fit. Ask explicitly whether "
+            "they'd be open to introducing you to the HM, or to a 10-min "
+            "chat first if that's easier. Stay under LinkedIn DM length — "
+            "no sign-off block, no subject."
         ),
     },
 }
@@ -191,8 +197,16 @@ def build_prompt(
     tone: str,
     portfolio_items: Iterable[PortfolioItem],
     resume_summary: str | None,
+    connection: Connection | None = None,
 ) -> str:
-    """Assemble the full Gemini prompt. Exposed for tests."""
+    """
+    Assemble the full Gemini prompt.
+
+    For `referral_ask`, `contact` is the *intro target* (the HM the user
+    wants to be introduced to) and `connection` is the warm peer who will
+    receive the DM. For all other channels, `contact` is the recipient
+    and `connection` is None.
+    """
     rules = _CHANNEL_RULES[channel]
     tone_block = _TONE_GUIDANCE.get(tone, _TONE_GUIDANCE["peer-pm"])
 
@@ -214,6 +228,30 @@ def build_prompt(
         else "Return `subject` as null. Only `body` matters for this channel."
     )
 
+    # Recipient block flips depending on channel: cold outreach addresses
+    # the contact; referral asks address the connection.
+    if channel == "referral_ask" and connection is not None:
+        recipient_block = (
+            f"Name: {connection.name}\n"
+            f"Title: {connection.current_title or 'Unknown'}\n"
+            f"Company: {connection.company}\n"
+            f"Connection notes: warm peer — already in the candidate's network "
+            f"(source: {connection.source})."
+        )
+        intro_target_block = (
+            "\n### Intro target (HM to ask intro for)\n"
+            f"Name: {contact.name}\n"
+            f"Title: {contact.title or 'Unknown'}\n"
+            f"Role type: {contact.role_type}\n"
+        )
+    else:
+        recipient_block = (
+            f"Name: {contact.name}\n"
+            f"Title: {contact.title or 'Unknown'}\n"
+            f"Role type: {contact.role_type}"
+        )
+        intro_target_block = ""
+
     return f"""You are drafting an outreach message from a Product Manager candidate to a
 hiring contact at a target company. Return ONLY valid JSON matching the schema.
 
@@ -228,10 +266,8 @@ Job description:
 {jd or '(no description available)'}
 
 ### Recipient
-Name: {contact.name}
-Title: {contact.title or 'Unknown'}
-Role type: {contact.role_type}
-
+{recipient_block}
+{intro_target_block}
 ### Candidate proof points (pick at most 1–2; reference only IDs you actually cite)
 {portfolio_block}
 
@@ -312,17 +348,25 @@ class OutreachGenerator:
         contact: Contact,
         channel: str,
         tone: str,
+        connection: Connection | None = None,
         resume_summary: str | None = None,
         portfolio_limit: int = 2,
     ) -> GenerationResult | None:
         """
         Produce one outreach draft. Returns None when Gemini isn't
         configured — callers (the API endpoint) translate that to 503.
+
+        For `referral_ask`, `connection` is required (the warm peer who
+        receives the DM); `contact` is the intro-target HM.
         """
         if channel not in CHANNELS:
             raise ValueError(f"Unknown channel {channel!r}; expected one of {CHANNELS}")
         if tone not in TONES:
             raise ValueError(f"Unknown tone {tone!r}; expected one of {TONES}")
+        if channel == "referral_ask" and connection is None:
+            raise ValueError(
+                "referral_ask requires a `connection` (the warm peer to DM)."
+            )
         if not self.is_configured:
             return None
 
@@ -340,6 +384,7 @@ class OutreachGenerator:
             tone=tone,
             portfolio_items=items,
             resume_summary=resume_summary,
+            connection=connection,
         )
 
         from google.genai import types  # lazy — keeps test import cheap

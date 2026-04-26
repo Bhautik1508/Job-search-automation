@@ -12,7 +12,6 @@ from sqlalchemy import (
     Text,
     Float,
     DateTime,
-    Boolean,
     ForeignKey,
     Index,
     UniqueConstraint,
@@ -55,9 +54,6 @@ class Job(Base):
 
     # ---- Classification ----
     company_type = Column(String(30), nullable=True)      # fintech, bank, nbfc, digital_banking_arm, other
-    company_tier = Column(String(30), nullable=True)      # top_tier, unicorn, growth_startup, early_startup, other
-    funding_stage = Column(String(30), nullable=True)     # seed, series_a..f, pre_ipo, public, bootstrapped, unknown
-    headcount_band = Column(String(30), nullable=True)    # <50, 50-200, 200-1000, 1000-5000, 5000+
 
     # ---- Scoring (Phase 2 — populated later) ----
     relevancy_score = Column(Float, nullable=True)
@@ -75,8 +71,6 @@ class Job(Base):
     # Phase R2 status enum: new | saved | applied | interviewing | offer | rejected | hidden.
     # `hidden` is soft-delete; default UI filter excludes hidden + rejected.
     status = Column(String(20), nullable=False, default="new", server_default="new")
-    # Legacy bool — shadow column kept in sync by the API for one release; R5 drops it.
-    applied = Column(Boolean, default=False)
     application_status = Column(String(30), nullable=True)
 
     # ---- Timestamps ----
@@ -96,8 +90,6 @@ class Job(Base):
         Index("ix_jobs_company_type", "company_type"),
         Index("ix_jobs_verdict", "verdict"),
         Index("ix_jobs_date_scraped", "date_scraped"),
-        Index("ix_jobs_applied_relevancy", "applied", "relevancy_score"),
-        Index("ix_jobs_company_tier", "company_tier"),
         Index("ix_jobs_status", "status"),
     )
 
@@ -194,17 +186,32 @@ class OutreachDraft(Base):
     case_study_link = Column(String(500), nullable=True)
     case_study_attachment = Column(String(500), nullable=True)
 
+    # Phase R4 referral asks — for channel="referral_ask", points at the
+    # warm Connection the message is being addressed to. NULL for cold
+    # outreach. contact_id stays the *intro target* (the HM) for referral
+    # asks so the generator knows whose name to drop in the body.
+    connection_id = Column(
+        Integer,
+        ForeignKey("connections.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     __table_args__ = (
+        # Unique per (job, contact, channel, connection). A NULL connection_id
+        # is treated as distinct in SQLite so cold-outreach rows still rely on
+        # app-level upsert in `upsert_outreach_draft` for de-duplication —
+        # which already works that way.
         UniqueConstraint(
-            "job_id", "contact_id", "channel",
-            name="uq_outreach_drafts_job_contact_channel",
+            "job_id", "contact_id", "channel", "connection_id",
+            name="uq_outreach_drafts_job_contact_channel_connection",
         ),
         Index("ix_outreach_drafts_job_id", "job_id"),
         Index("ix_outreach_drafts_contact_id", "contact_id"),
         Index("ix_outreach_drafts_status", "status"),
+        Index("ix_outreach_drafts_connection_id", "connection_id"),
     )
 
     def __repr__(self):
@@ -237,6 +244,47 @@ class JobContact(Base):
 
     def __repr__(self):
         return f"<JobContact(job_id={self.job_id}, contact_id={self.contact_id})>"
+
+
+class Connection(Base):
+    """
+    Phase R4 — a warm connection imported from Happenstance / LinkedIn /
+    a CSV. Powers the referral-ask flow: for any job, surface connections
+    at job.company so the user can ask for a warm intro.
+
+    Independent of the `contacts` table. `contacts` holds the HMs and
+    recruiters we *target*; `connections` holds the people we already know
+    and would ask for an intro through.
+    """
+
+    __tablename__ = "connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(300), nullable=False)
+    company = Column(String(300), nullable=False)
+    company_normalized = Column(String(300), nullable=False)
+    current_title = Column(String(500), nullable=True)
+    linkedin_url = Column(String(1000), nullable=True)
+
+    # Where the row came from. "csv" is the v1 path; "happenstance"/"linkedin"
+    # land here when an API import lights up.
+    source = Column(String(30), nullable=False, default="csv")
+
+    last_synced_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        # Same person at the same company shouldn't be imported twice; we
+        # canonicalize on linkedin_url when present, else (name, company).
+        Index("ix_connections_company_normalized", "company_normalized"),
+        Index("ix_connections_linkedin_url", "linkedin_url"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<Connection(id={self.id}, name='{self.name}', company='{self.company}', "
+            f"source='{self.source}')>"
+        )
 
 
 # ------------------------------------------------------------------

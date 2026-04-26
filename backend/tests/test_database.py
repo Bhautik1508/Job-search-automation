@@ -87,7 +87,7 @@ class TestJobModel:
         job = _make_job()
         db_session.add(job)
         db_session.commit()
-        assert job.applied is False
+        assert job.status == "new"
         assert job.relevancy_score is None
         assert job.application_status is None
 

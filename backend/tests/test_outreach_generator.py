@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend.database.models import Contact, Job
+from backend.database.models import Connection, Contact, Job
 from backend.outreach.generator import (
     CHANNELS,
     TONES,
@@ -53,7 +53,6 @@ def _job(**kw) -> Job:
         source_portal="naukri",
         source_engine="test",
         company_type="fintech",
-        company_tier="unicorn",
         skills="payments, growth, product",
         date_scraped=datetime.now(timezone.utc),
     )
@@ -74,6 +73,22 @@ def _contact(**kw) -> Contact:
     )
     defaults.update(kw)
     return Contact(**defaults)
+
+
+def _connection(**kw) -> Connection:
+    defaults = dict(
+        id=1,
+        name="Bob Peer",
+        company="Razorpay",
+        company_normalized="razorpay",
+        current_title="Senior PM",
+        linkedin_url="https://linkedin.com/in/bobpeer",
+        source="csv",
+        last_synced_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(kw)
+    return Connection(**defaults)
 
 
 class TestTagsFromJob:
@@ -260,6 +275,7 @@ class TestAllChannelsAndTonesAccepted:
         result = gen.generate(
             job=_job(), contact=_contact(),
             channel=channel, tone=tone,
+            connection=_connection() if channel == "referral_ask" else None,
         )
         assert result is not None
         assert result.channel == channel
