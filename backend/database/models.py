@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
 )
+from sqlalchemy import text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from backend.config import DATABASE_URL
@@ -314,9 +315,120 @@ def get_session_factory(engine=None):
     return sessionmaker(bind=engine)
 
 
+# Alembic HEAD revision — keep in sync with backend/database/migrations/versions/.
+# init_db() stamps this into alembic_version after the self-heal so a later
+# `alembic upgrade head` is a no-op against an already-converged DB.
+_ALEMBIC_HEAD = "0009_r5_cleanup"
+
+
 def init_db(engine=None):
-    """Create all tables if they don't exist."""
+    """
+    Create missing tables, then converge the schema for existing tables.
+
+    `Base.metadata.create_all()` only creates tables that don't exist — it
+    cannot ALTER existing tables. On Postgres deployments that pre-date a
+    schema change (e.g. Render where the prod DB was created at Phase 1
+    baseline), this leaves columns missing and the next write blows up with
+    `column "X" of relation "Y" does not exist`.
+
+    To make every deploy self-heal without manual SQL or a working Alembic
+    Blueprint preDeployCommand, we run an idempotent set of post-baseline
+    DDL statements after create_all. Every operation uses IF [NOT] EXISTS
+    so re-runs are no-ops, and we stamp alembic_version at HEAD so future
+    `alembic upgrade head` invocations short-circuit cleanly.
+
+    Only runs on Postgres — SQLite (used by tests and local dev) doesn't
+    support `ADD COLUMN IF NOT EXISTS` and is rebuilt from scratch each
+    test run anyway.
+    """
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+
+    if engine.dialect.name == "postgresql":
+        _converge_postgres_schema(engine)
+
     return engine
+
+
+def _converge_postgres_schema(engine) -> None:
+    """Run idempotent ALTERs to bring an existing Postgres DB to HEAD."""
+    pre_drop_statements = [
+        # 0006_status — add R2 status enum + index.
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'new'",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)",
+        # 0002_indexes — hot-path indexes for /api/jobs filters.
+        "CREATE INDEX IF NOT EXISTS ix_jobs_relevancy_score ON jobs (relevancy_score)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_apply_priority ON jobs (apply_priority)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_company_type ON jobs (company_type)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_verdict ON jobs (verdict)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_date_scraped ON jobs (date_scraped)",
+        # 0007_case_study — outreach_drafts case-study columns.
+        "ALTER TABLE outreach_drafts ADD COLUMN IF NOT EXISTS case_study_link VARCHAR(500)",
+        "ALTER TABLE outreach_drafts ADD COLUMN IF NOT EXISTS case_study_attachment VARCHAR(500)",
+        # 0008_connections — connection_id FK on outreach_drafts.
+        "ALTER TABLE outreach_drafts ADD COLUMN IF NOT EXISTS connection_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_outreach_drafts_connection_id ON outreach_drafts (connection_id)",
+    ]
+
+    post_drop_statements = [
+        # 0009_r5_cleanup — drop legacy columns + their indexes.
+        "DROP INDEX IF EXISTS ix_jobs_applied_relevancy",
+        "DROP INDEX IF EXISTS ix_jobs_company_tier",
+        "ALTER TABLE jobs DROP COLUMN IF EXISTS applied",
+        "ALTER TABLE jobs DROP COLUMN IF EXISTS company_tier",
+        "ALTER TABLE jobs DROP COLUMN IF EXISTS funding_stage",
+        "ALTER TABLE jobs DROP COLUMN IF EXISTS headcount_band",
+    ]
+
+    with engine.begin() as conn:
+        for stmt in pre_drop_statements:
+            conn.execute(text(stmt))
+
+        # Backfill status from legacy `applied` BEFORE we drop the column —
+        # otherwise rows that were applied=true get stuck at status='new'.
+        # Wrapped in a DO block so the UPDATE is skipped on DBs where
+        # `applied` was already dropped (re-runs of this code path).
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'jobs' AND column_name = 'applied'
+                ) THEN
+                    EXECUTE 'UPDATE jobs SET status = ''applied'' '
+                            'WHERE applied IS TRUE AND status = ''new''';
+                END IF;
+            END
+            $$;
+        """))
+
+        for stmt in post_drop_statements:
+            conn.execute(text(stmt))
+
+        # FK: outreach_drafts.connection_id → connections.id. Postgres has
+        # no `ADD CONSTRAINT IF NOT EXISTS`, so we look it up first.
+        fk_exists = conn.execute(text(
+            "SELECT 1 FROM information_schema.table_constraints "
+            "WHERE table_name = 'outreach_drafts' "
+            "AND constraint_name = 'fk_outreach_drafts_connection_id'"
+        )).first()
+        if not fk_exists:
+            conn.execute(text(
+                "ALTER TABLE outreach_drafts "
+                "ADD CONSTRAINT fk_outreach_drafts_connection_id "
+                "FOREIGN KEY (connection_id) REFERENCES connections (id) "
+                "ON DELETE SET NULL"
+            ))
+
+        # Stamp alembic_version at HEAD so `alembic upgrade head` is a
+        # no-op on the next deploy. Only inserts if the table is empty.
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS alembic_version ("
+            "version_num VARCHAR(32) NOT NULL, "
+            "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+        ))
+        conn.execute(text(
+            "INSERT INTO alembic_version (version_num) "
+            "SELECT :head WHERE NOT EXISTS (SELECT 1 FROM alembic_version)"
+        ), {"head": _ALEMBIC_HEAD})
