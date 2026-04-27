@@ -15,6 +15,11 @@ services:
     name: job-search-api
     runtime: python
     buildCommand: pip install -r requirements.txt
+    # Run Alembic migrations before starting the server. Build-step changes
+    # to the DB schema (e.g. R2 status enum, R5 column drops) require
+    # `alembic upgrade head` — `init_db()`'s create_all only creates
+    # missing tables, it can't ALTER existing ones.
+    preDeployCommand: alembic upgrade head
     startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
@@ -52,6 +57,10 @@ services:
     name: job-search-worker
     runtime: python
     buildCommand: pip install -r requirements.txt
+    # The web service's preDeployCommand owns migrations, but the worker
+    # boots independently — run a no-op upgrade here so a worker-only
+    # redeploy can still self-heal a stale schema.
+    preDeployCommand: alembic upgrade head
     startCommand: python run_scheduler.py
     plan: free
     envVars:
